@@ -547,9 +547,9 @@ $3Dmol.Parsers = (function() {
             }
         }
         
-        for (var i = 0; i < atoms.length; i++) {
-            assignBonds(atoms[i]);
-        }
+         for (var i = 0; i < atoms.length; i++) {
+             assignBonds(atoms[i]);
+         }
         
         if (options.onemol) {
             var temp = atoms;
@@ -572,6 +572,502 @@ $3Dmol.Parsers = (function() {
          return atoms;
     };
 
+    // read a TXYZ file from str and return result
+    /**
+     * @param {string}
+     *            str
+     * @param {Object}
+     *            options
+     */
+    parsers.txyz = parsers.TXYZ = function(str, options) {
+        
+        var atoms = [[]];
+        var lines = str.split(/\r?\n|\r/);
+        var modelData = atoms.modelData = [{symmetries:[]}];
+        while (lines.length > 0) {
+            if (lines.length < 2)
+                break;
+            var tokens2 = lines[0].replace(/^\s+/, "").replace(/\s+/g, " ").split(
+                        " ");
+            var atomCount = parseInt(tokens2[0]);
+            if (tokens2.length > 2) {
+                var a, b, c, alpha, beta, gamma;
+                a =  parseFloat(tokens2[1]);
+                b =  parseFloat(tokens2[2]);
+                c =  parseFloat(tokens2[3]);
+                alpha =  parseFloat(tokens2[4]);
+                beta  =  parseFloat(tokens2[5]);
+                gamma =  parseFloat(tokens2[6]);
+                modelData[modelData.length-1].cryst = {'a' : a, 'b' : b, 'c' : c, 'alpha' : alpha, 'beta' : beta, 'gamma' : gamma};
+                modelData.cryst = {'a' : a, 'b' : b, 'c' : c, 'alpha' : alpha, 'beta' : beta, 'gamma' : gamma};
+                //console.log(modelData);
+                //console.log(modelData.cryst);
+                //console.log(modelData[modelData.length-1].cryst);
+                //console.log(tokens2.length,tokens2);
+//                 console.log(a,b,c,alpha,beta,gamma);
+            }
+            if (isNaN(atomCount) || atomCount <= 0)
+                break;
+            if (lines.length < atomCount + 2)
+                break;
+            var offset = 1;
+            var start = atoms[atoms.length-1].length;
+            var end = start + atomCount;
+            for (var i = start; i < end; i++) {
+                var line = lines[offset++];
+                var tokens = line.replace(/^\s+/, "").replace(/\s+/g, " ").split(
+                        " ");
+                //console.log(tokens);
+                var atom = {};
+                atom.serial = i;
+                var elem = tokens[1];
+                atom.index = i;
+                atom.atom = atom.elem = elem[0].toUpperCase() + elem.substr(1).toLowerCase();
+                atom.x = parseFloat(tokens[2]);
+                atom.y = parseFloat(tokens[3]);
+                atom.z = parseFloat(tokens[4]);
+                atom.type = tokens[5];
+                atom.hetflag = true;
+                atom.bonds = [];
+                atom.bondOrder = [];
+                
+                for (var j = 6; j < tokens.length; j++) {
+                    if (tokens[j] != ""){
+                        atom.bonds.push(parseInt(tokens[j])-1);
+                        atom.bondOrder.push(1);
+                    }
+                }
+//                 //console.log(atom.bonds)
+                            
+                atom.properties = {};
+                atoms[atoms.length-1][i] = atom;
+              //  if (tokens.length >= 7) {
+              //      atom.dx = parseFloat(tokens[4]);
+              //      atom.dy = parseFloat(tokens[5]);
+              //      atom.dz = parseFloat(tokens[6]);
+              //  }
+            }
+
+            if (options.multimodel) {
+                atoms.push([]);
+                lines.splice(0, offset);
+            }
+            else {
+                break;
+            }
+        }
+        
+         //for (var i = 0; i < atoms.length; i++) {
+         //    assignBonds(atoms[i]);
+         //}
+        
+        if (options.onemol) {
+            var temp = atoms;
+            atoms = [];
+            atoms.push(temp[0]);
+            for (var i = 1; i < temp.length; i++) {
+                var offset = atoms[0].length;
+                for (var j = 0; j < temp[i].length; j++) {
+                    var a = temp[i][j];
+                    for (var k = 0; k < a.bonds.length; k++) {
+                        a.bonds[k] = a.bonds[k] + offset;
+                    }
+                    a.index = atoms[0].length;
+                    a.serial = atoms[0].length;
+                    atoms[0].push(a);
+                }
+            }
+        }
+         return atoms;
+    };
+
+    parsers.bb = parsers.BB = function(str, options) {
+        
+        var atoms = [[]];
+        //var lines = str.split(/\r?\n|\r/).filter(String);
+        var lines = str.split(/\r?\n|\r/)
+        var modelData = atoms.modelData = [{symmetries:[]}];
+        while (lines.length > 0) {
+            console.log('mama')
+            if (lines.length < 2)
+                break;
+            //var tokens2 = lines[0].replace(/^\s+/, "").replace(/\s+/g, " ").split(
+            //            " ");
+            var tokens2 = lines[0].replace(/^\s+/, "").replace(/\s+/g, " ").split(
+                        " ").filter(String);
+            var atomCount = parseInt(tokens2[0]);
+//            console.log(tokens2);
+//            console.log(tokens2[tokens2.length-1]);
+//            if (tokens2[tokens2.lenght-1] === "" && typeof tokens2[tokens2.lenth-1]=='string'){
+//                console.log(tokens2);
+//                tokens2.splice(tokens2.lenght-1,1);
+//            }
+            if (tokens2.length > 1) {
+                var voffset = 0
+                if (tokens2[1]=='v2.0')
+                    voffset = 1
+                var nconns = tokens2.length - 2 - voffset;
+                var conns  = [];
+                var conncoords = [];
+                var rotType = tokens2[1+voffset]
+                for (var i = 0; i < nconns; i++){
+                    if (voffset == 0){
+                        conns.push(parseFloat(tokens2[i+2])-1);
+                    }
+                    else {
+                        conns.push(parseFloat(tokens2[i+3].split("*")[1])-1);
+                    }
+                }
+            }
+            if (isNaN(atomCount) || atomCount <= 0)
+                break;
+            if (lines.length < atomCount + 2)
+                break;
+            var offset = 1;
+            var start = atoms[atoms.length-1].length;
+            var end = start + atomCount;
+            for (var i = start; i < end; i++) {
+                var line = lines[offset++];
+                var tokens = line.replace(/^\s+/, "").replace(/\s+/g, " ").split(
+                        " ");
+                //console.log(tokens);
+                var atom = {};
+                atom.serial = i;
+                var elem = tokens[1];
+                atom.index = i;
+                atom.atom = atom.elem = elem[0].toUpperCase() + elem.substr(1).toLowerCase();
+                atom.x = parseFloat(tokens[2]);
+                atom.y = parseFloat(tokens[3]);
+                atom.z = parseFloat(tokens[4]);
+                atom.type = tokens[5];
+                for (var j = 0; j < nconns;j++) {
+                    if (i==conns[j])
+                        conncoords.push([atom.x, atom.y, atom.z]);
+                }
+                atom.hetflag = true;
+                atom.bonds = [];
+                atom.bondOrder = [];
+                
+                for (var j = 6; j < tokens.length; j++) {
+                    if (tokens[j] != ""){
+                        atom.bonds.push(parseInt(tokens[j])-1);
+                        atom.bondOrder.push(1);
+                    }
+                }
+//                 console.log(atom.bonds)
+                            
+                atom.properties = {};
+                atoms[atoms.length-1][i] = atom;
+              //  if (tokens.length >= 7) {
+              //      atom.dx = parseFloat(tokens[4]);
+              //      atom.dy = parseFloat(tokens[5]);
+              //      atom.dz = parseFloat(tokens[6]);
+              //  }
+            }
+            var specRot = []
+            if (rotType == 'special'){
+                //line = lines[lines.length-1];
+                line = lines[atomCount+1];
+                tokens = line.replace(/^\s+/, "").replace(/\s+/g, " ").split(
+                        " ");
+                specRot.push(parseFloat(tokens[0]));
+                specRot.push(parseFloat(tokens[1]));
+                specRot.push(parseFloat(tokens[2]));
+                };
+            modelData[modelData.length-1].conns = conncoords
+            modelData[modelData.length-1].cindex = conns
+            modelData[modelData.length-1].rotType = rotType
+            modelData[modelData.length-1].specRot = specRot
+
+            if (options.multimodel) {
+                atoms.push([]);
+                lines.splice(0, offset);
+            }
+            else {
+                break;
+            }
+        };
+        
+         //for (var i = 0; i < atoms.length; i++) {
+         //    assignBonds(atoms[i]);
+         //}
+        
+        if (options.onemol) {
+            var temp = atoms;
+            atoms = [];
+            atoms.push(temp[0]);
+            for (var i = 1; i < temp.length; i++) {
+                var offset = atoms[0].length;
+                for (var j = 0; j < temp[i].length; j++) {
+                    var a = temp[i][j];
+                    for (var k = 0; k < a.bonds.length; k++) {
+                        a.bonds[k] = a.bonds[k] + offset;
+                    }
+                    a.index = atoms[0].length;
+                    a.serial = atoms[0].length;
+                    atoms[0].push(a);
+                }
+            }
+        }
+         console.log(atoms);
+         return atoms;
+    };
+    
+                
+        parsers.mfp = parsers.MFP = function(str, options) {
+        
+        var atoms = [[]];
+        var lines = str.split(/\r?\n|\r/)
+        var modelData = atoms.modelData = [{symmetries:[]}];
+        var atomCount = null
+        var counter = 0
+        var specRot = [];
+        var nconns = 0
+        var conncoords = []
+        var conns = []
+        var ctype = 'xyz'
+        while (atomCount == null) {
+            var tokens2 = lines[counter].replace(/^\s+/, "").replace(/\s+/g, " ").split(
+                        " ").filter(String);
+            if (tokens2[0] == '#'){
+                if (tokens2[1] == 'bbcenter'){
+                    var rotType = tokens2[2];
+                    if (rotType == 'special'){
+                        specRot.push(parseFloat(tokens2[4]));
+                        specRot.push(parseFloat(tokens2[4]));
+                        specRot.push(parseFloat(tokens2[5]));
+                        
+                    }
+                }
+                else if (tokens2[1] == 'bbconn') {
+                    var nconns = tokens2.length -2;
+                    var type = 0
+                    var conntypes = []
+                    for (var i = 0; i < nconns; i++){
+                        if (tokens2[i+2] == '/'){
+                            type = type + 1;
+                        }
+                        else{
+                            conntypes.push(type);
+                            conns.push(parseFloat(tokens2[i+2].split("*")[1])-1);
+                        }
+                    }
+                nconns = conns.length;
+                }
+                else if (tokens2[1] == 'cell') {
+                    a =  parseFloat(tokens2[2]);
+                    b =  parseFloat(tokens2[3]);
+                    c =  parseFloat(tokens2[4]);
+                    alpha =  parseFloat(tokens2[5]);
+                    beta  =  parseFloat(tokens2[6]);
+                    gamma =  parseFloat(tokens2[7]);
+                    modelData[modelData.length-1].cryst = {'a' : a, 'b' : b, 'c' : c, 'alpha' : alpha, 'beta' : beta, 'gamma' : gamma};
+                    modelData.cryst = {'a' : a, 'b' : b, 'c' : c, 'alpha' : alpha, 'beta' : beta, 'gamma' : gamma};
+                }
+                else if (tokens2[1] == 'type'){
+                    var ctype = tokens2[2]                    
+                }
+            }
+            else {
+                atomCount = parseInt(tokens2[0]);
+            }
+            var counter = counter + 1;
+        }
+        var offset = 1;
+        //var start = atoms[atoms.length-1].length;
+        var start = counter
+        var end = start + atomCount;
+        var idx = 0
+        for (var i = start; i < end; i++) {
+            //var line = lines[offset++];
+            var line = lines[i]
+            var tokens = line.replace(/^\s+/, "").replace(/\s+/g, " ").split(
+                    " ");
+            var atom = {};
+            atom.serial = idx;
+            var elem = tokens[1];
+            atom.index = idx;
+            atom.atom = atom.elem = elem[0].toUpperCase() + elem.substr(1).toLowerCase();
+            atom.x = parseFloat(tokens[2]);
+            atom.y = parseFloat(tokens[3]);
+            atom.z = parseFloat(tokens[4]);
+            atom.type = tokens[5];
+            for (var j = 0; j < nconns;j++) {
+                if (idx==conns[j])
+                    conncoords.push([atom.x, atom.y, atom.z]);
+            }
+            atom.hetflag = true;
+            atom.bonds = [];
+            atom.bondOrder = [];
+            
+            for (var j = 8; j < tokens.length; j++) {
+                if (tokens[j] != ""){
+                    if (ctype == 'topo'){ 
+                        atom.bonds.push(parseInt(tokens[j].split("/")[0])-1);
+                    }
+                    else {
+                        atom.bonds.push(parseInt(tokens[j])-1);
+                    }
+                    atom.bondOrder.push(1);
+                }
+            }
+                        
+            atom.properties = {};
+            atoms[atoms.length-1][idx] = atom;
+            var idx = idx + 1
+        }
+        modelData[modelData.length-1].conns = conncoords;
+        modelData[modelData.length-1].conntypes = conntypes;
+        modelData[modelData.length-1].cindex = conns;
+        modelData[modelData.length-1].rotType = rotType;
+        modelData[modelData.length-1].specRot = specRot;
+
+        if (options.onemol) {
+            var temp = atoms;
+            atoms = [];
+            atoms.push(temp[0]);
+            for (var i = 1; i < temp.length; i++) {
+                var offset = atoms[0].length;
+                for (var j = 0; j < temp[i].length; j++) {
+                    var a = temp[i][j];
+                    for (var k = 0; k < a.bonds.length; k++) {
+                        a.bonds[k] = a.bonds[k] + offset;
+                    }
+                    a.index = atoms[0].length;
+                    a.serial = atoms[0].length;
+                    atoms[0].push(a);
+                }
+            }
+        }
+         return atoms;
+    };
+
+
+    parsers.stxyz = parsers.STXYZ = function(str, options) {
+        
+        var atoms = [[]];
+        //var lines = str.split(/\r?\n|\r/).filter(String);
+        var lines = str.split(/\r?\n|\r/)
+        var modelData = atoms.modelData = [{symmetries:[]}];
+        while (lines.length > 0) {
+            if (lines.length < 2)
+                break;
+            //var tokens2 = lines[0].replace(/^\s+/, "").replace(/\s+/g, " ").split(
+            //            " ");
+            var tokens2 = lines[0].replace(/^\s+/, "").replace(/\s+/g, " ").split(
+                        " ").filter(String);
+            var atomCount = parseInt(tokens2[0]);
+//            console.log(tokens2);
+//            console.log(tokens2[tokens2.length-1]);
+//            if (tokens2[tokens2.lenght-1] === "" && typeof tokens2[tokens2.lenth-1]=='string'){
+//                console.log(tokens2);
+//                tokens2.splice(tokens2.lenght-1,1);
+//            }
+            if (tokens2.length > 1) {
+                var nconns = tokens2.length - 2;
+                var conns  = [];
+                var conncoords = [];
+                var rotType = tokens2[1]
+                for (var i = 0; i < nconns; i++){
+                    conns.push(parseFloat(tokens2[i+2])-1);
+                }
+            }
+            if (isNaN(atomCount) || atomCount <= 0)
+                break;
+            if (lines.length < atomCount + 2)
+                break;
+            var offset = 1;
+            var start = atoms[atoms.length-1].length;
+            var end = start + atomCount;
+            for (var i = start; i < end; i++) {
+                var line = lines[offset++];
+                var tokens = line.replace(/^\s+/, "").replace(/\s+/g, " ").split(
+                        " ");
+                //console.log(tokens);
+                var atom = {};
+                atom.serial = i;
+                var elem = tokens[1];
+                atom.index = i;
+                atom.atom = atom.elem = elem[0].toUpperCase() + elem.substr(1).toLowerCase();
+                atom.x = parseFloat(tokens[2]);
+                atom.y = parseFloat(tokens[3]);
+                atom.z = parseFloat(tokens[4]);
+                atom.type = tokens[5];
+                for (var j = 0; j < nconns;j++) {
+                    if (i==conns[j])
+                        conncoords.push([atom.x, atom.y, atom.z]);
+                }
+                atom.hetflag = true;
+                atom.bonds = [];
+                atom.bondOrder = [];
+                
+                for (var j = 6; j < tokens.length; j++) {
+                    if (tokens[j] != ""){
+                        atom.bonds.push(parseInt(tokens[j])-1);
+                        atom.bondOrder.push(1);
+                    }
+                }
+//                 console.log(atom.bonds)
+                            
+                atom.properties = {};
+                atoms[atoms.length-1][i] = atom;
+              //  if (tokens.length >= 7) {
+              //      atom.dx = parseFloat(tokens[4]);
+              //      atom.dy = parseFloat(tokens[5]);
+              //      atom.dz = parseFloat(tokens[6]);
+              //  }
+            }
+
+            var specRot = []
+            if (rotType == 'special'){
+                //line = lines[lines.length-1];
+                line = lines[atomCount+1];
+                tokens = line.replace(/^\s+/, "").replace(/\s+/g, " ").split(
+                        " ");
+                specRot.push(parseFloat(tokens[0]));
+                specRot.push(parseFloat(tokens[1]));
+                specRot.push(parseFloat(tokens[2]));
+                };
+            modelData[modelData.length-1].conns = conncoords
+            modelData[modelData.length-1].cindex = conns
+            modelData[modelData.length-1].rotType = rotType
+            modelData[modelData.length-1].specRot = specRot
+
+            if (options.multimodel) {
+                atoms.push([]);
+                lines.splice(0, offset);
+            }
+            else {
+                break;
+            }
+        };
+        
+         //for (var i = 0; i < atoms.length; i++) {
+         //    assignBonds(atoms[i]);
+         //}
+        
+        if (options.onemol) {
+            var temp = atoms;
+            atoms = [];
+            atoms.push(temp[0]);
+            for (var i = 1; i < temp.length; i++) {
+                var offset = atoms[0].length;
+                for (var j = 0; j < temp[i].length; j++) {
+                    var a = temp[i][j];
+                    for (var k = 0; k < a.bonds.length; k++) {
+                        a.bonds[k] = a.bonds[k] + offset;
+                    }
+                    a.index = atoms[0].length;
+                    a.serial = atoms[0].length;
+                    atoms[0].push(a);
+                }
+            }
+        }
+
+         return atoms;
+    };    
+ 
+    
     // put atoms specified in sdf fromat in str into atoms
     // adds to atoms, does not replace
     /**

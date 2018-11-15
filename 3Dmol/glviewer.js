@@ -1267,6 +1267,421 @@ $3Dmol.GLViewer = (function() {
 
             return s;
         };
+        this.addConnLabels = function(model,size) {
+            var s = new $3Dmol.GLShape({'wireframe' : true});
+            //var l = new $3Dmol.Label();
+            var data = model.getConnData();
+            var points = [];
+            var atoms = getAtomsFromSel();
+            for (i=0;i<data[0].length;i++){
+                //points.push(new $3Dmol.Vector3(data[1][i][0], data[1][i][1], data[1][i][2]));
+                points.push(new $3Dmol.Vector3(data[1][i][0], data[1][i][1], data[1][i][2]));
+                var ls = atoms[data[0][i]].elem+(data[0][i]+1).toString()+'-'+(data[4][i]).toString();
+                //var l = new $3Dmol.Label(ls, {fontSize: size, fontColor: 'black', showBackground : false, position: {x: data[1][i][0], y: data[1][i][1], z: data[1][i][2]}});
+                var l = new $3Dmol.Label(ls, {fontSize: size, fontColor: 'black', showBackground : false, position: {x: atoms[data[0][i]].x, y: atoms[data[0][i]].y, z: atoms[data[0][i]].z}});
+                l.setContext();
+                modelGroup.add(l.sprite);
+                labels.push(l);
+            }
+            show();
+            //s.addLine({start: points[0], end: points[1]});
+            //shapes.push(s);
+            return;
+
+        }
+
+        this.addAtomLabels = function(model, size){
+            var atoms = getAtomsFromSel();
+            for (i=0;i<atoms.length;i++){
+                var l = new $3Dmol.Label((atoms[i].elem+(i+1).toString()), {fontSize: size, fontColor: 'black', showBackground : false, position: {x: atoms[i].x, y: atoms[i].y, z: atoms[i].z}});
+                l.setContext();
+                modelGroup.add(l.sprite);
+                labels.push(l);
+            }
+            show();
+        }
+
+        this.addTypeLabels = function(model, size){
+            var atoms = getAtomsFromSel();
+            for (i=0;i<atoms.length;i++){
+                var l = new $3Dmol.Label(atoms[i].type, {fontSize: size, fontColor: 'black', showBackground : false, position: {x: atoms[i].x, y: atoms[i].y, z: atoms[i].z}});
+                l.setContext();
+                modelGroup.add(l.sprite);
+                labels.push(l);
+            }
+            show();
+        }
+
+
+
+        this.addArbLabel = function(model, text, color, pos, size){
+            var l = new $3Dmol.Label(text, {fontSize: size, fontColor: color, showBackground : false, position: {x: pos[0], y: pos[1], z: pos[2]}});
+            l.setContext();
+            modelGroup.add(l.sprite);
+            labels.push(l);
+            show();
+        }
+
+        this.calcRotCenter = function(model){
+            var data = model.getConnData();
+            if (data[2] == 'coc'){
+                this.addCOC(model)
+            }
+            else if (data[2] == 'com'){
+                this.addCOM(model)
+            }
+            else if (data[2] == 'special'){
+                this.addSpecial(model)
+            };
+        }
+
+        this.addRotCenter = function(model){
+            var data = model.getConnData();
+            var s = new $3Dmol.GLShape({'wireframe' : true});
+            if (data[2] == 'coc'){
+                s.addSphere({color: 'red', radius : 0.6,center : this.center-this.center});
+                shapes.push(s);
+                show();
+            }
+            else if (data[2] == 'com'){
+                s.addSphere({color: 'blue', radius : 0.6,center : this.center-this.center});
+                shapes.push(s);
+                show();
+            }
+            else if (data[2] == 'special'){
+                s.addSphere({color: 'black', radius : 0.6,center : this.center-this.center});
+                shapes.push(s);
+                show();
+            };
+        }
+
+        this.shiftCenter = function(model){
+            var atoms = getAtomsFromSel();
+            for (i=0;i<atoms.length;i++){
+                atoms[i].x = atoms[i].x - this.center['x'];
+                atoms[i].y = atoms[i].y - this.center['y'];
+                atoms[i].z = atoms[i].z - this.center['z'];
+            };
+        }
+        
+        this.shiftToCell = function(model){
+            var atoms = getAtomsFromSel();
+            com = this.addCOM(model);
+            vecs = this.calcCellVec(model);
+            vec = [];
+            vec.push(vecs[0][0]+vecs[1][0]+vecs[2][0]);
+            vec.push(vecs[0][1]+vecs[1][1]+vecs[2][1]);
+            vec.push(vecs[0][2]+vecs[1][2]+vecs[2][2]);
+            for (i=0;i<atoms.length;i++){
+                atoms[i].x = atoms[i].x -com.x + 0.5*vec[0];
+                atoms[i].y = atoms[i].y -com.y + 0.5*vec[1];
+                atoms[i].z = atoms[i].z -com.z + 0.5*vec[2];
+            };
+//            var data = model.getCrystData();
+//            var atoms = getAtomsFromSel();
+//            for (i=0;i<atoms.length;i++){
+//                atoms[i].x = atoms[i].x + 0.5*data.a;
+//                atoms[i].y = atoms[i].y + 0.5*data.b;
+//                atoms[i].z = atoms[i].z + 0.5*data.c;
+//            };
+        }
+
+        this.calcCellVec = function(model){
+            var abc = model.getCrystData();
+            a = abc.a;
+            b = abc.b;
+            c = abc.c;
+            alpha = abc.alpha * (Math.PI/180.0);
+            beta  = abc.beta  * (Math.PI/180.0);
+            gamma = abc.gamma * (Math.PI/180.0);
+            cosa = Math.cos(alpha);
+            cosb = Math.cos(beta);
+            sinb = Math.sin(beta);
+            cosc = Math.cos(gamma);
+            sinc = Math.sin(gamma);
+            bterm = (cosa-(cosb*cosc))/sinc;
+            cterm = Math.sqrt(1.0-(cosb*cosb)-(bterm*bterm));
+            vectors = [];
+            vectors.push([1.0*a,0.0,0.0]);
+            vectors.push([cosc*b,sinc*b,0.0]);
+            vectors.push([cosb*c,bterm*c,cterm*c]);
+            return vectors;
+        }
+
+        this.removePBonds = function(model, cut){
+            var atoms = getAtomsFromSel();
+            for (i=1;i<atoms.length;i++){
+                nbonds = [];
+                nbondorder = [];
+                for (j=0;j<atoms[i].bonds.length;j++){
+                    //var b = this.calcBond(atoms[i],atoms[j]);
+                    var b = this.calcBond(atoms[i],atoms[atoms[i].bonds[j]]);
+                    if (b < cut*cut){
+                        nbonds.push(atoms[i].bonds[j]);
+                        nbondorder.push(1);
+                    };
+                };
+                atoms[i].bonds = nbonds;
+                atoms[i].bondOrder = nbondorder;
+            };
+        }
+
+        this.calcBond = function(i, j){
+            vec = [];
+            vec.push(i.x-j.x);
+            vec.push(i.y-j.y);
+            vec.push(i.z-j.z);
+            d = vec[0]*vec[0]+vec[1]*vec[1]+vec[2]*vec[2];
+            return d;
+        }
+
+        this.addCOC = function(model){
+            var s = new $3Dmol.GLShape({'wireframe' : true});
+            var atoms = getAtomsFromSel();
+            var data = model.getConnData();
+            var coc = [0.0,0.0,0.0];
+            var nconns = data[0].length;
+            for (i=0;i<nconns;i++){
+                coc[0] = coc[0] + ((1.0/nconns) * atoms[data[0][i]].x);
+                coc[1] = coc[1] + ((1.0/nconns) * atoms[data[0][i]].y);
+                coc[2] = coc[2] + ((1.0/nconns) * atoms[data[0][i]].z);
+            }
+            //console.log(model.getElemMass(atoms[0]));
+            vcoc = new $3Dmol.Vector3(coc[0], coc[1], coc[2]);
+            this.center = vcoc
+            //s.addSphere({color: 'red', radius : 0.6,center : vcoc});
+            //shapes.push(s);
+            //show();
+
+        }
+
+        this.addSpecial = function(model){
+            var s = new $3Dmol.GLShape({'wireframe' : true});
+            var data = model.getConnData();
+            vspec = new $3Dmol.Vector3(data[3][0], data[3][1], data[3][2]);
+            //s.addSphere({color: 'black', radius : 0.6,center : vspec});
+            //shapes.push(s);
+            this.center = vspec
+            //show();
+        }
+
+        this.addCOG = function(model){
+            var s = new $3Dmol.GLShape({'wireframe' : true});
+            var atoms = getAtomsFromSel();
+            var data = model.getConnData();
+            var com = [0.0,0.0,0.0];
+            var natoms = atoms.length;
+            var mtot = 0.0
+            for (i=0;i<natoms;i++){
+                com[0] = com[0] + (1.0/natoms * atoms[i].x);
+                com[1] = com[1] + (1.0/natoms * atoms[i].y);
+                com[2] = com[2] + (1.0/natoms * atoms[i].z);
+            }
+            vcom = new $3Dmol.Vector3(com[0], com[1], com[2]);
+            this.center = vcom;
+            return vcom
+            //s.addSphere({color: 'blue', radius : 0.6,center : vcom});
+            //shapes.push(s);
+            //show();
+        }
+
+
+        this.addCOM = function(model){
+            var masses = {
+                "H"  :1.00794,
+                "HE" :4.0026,
+                "He" :4.0026,
+                "LI" :6.941,
+                "Li" :6.941,
+                "BE" :9.01218,
+                "Be" :9.01218,
+                "B" :10.811,
+                "C" :12.0107,
+                "N" :14.0067,
+                "O" :15.9994,
+                "F" :18.9984,
+                "NE" :20.1797,
+                "Ne" :20.1797,
+                "NA" :22.9898,
+                "Na" :22.9898,
+                "MG" :24.305,
+                "Mg" :24.305,
+                "AL" :26.9815,
+                "Al" :26.9815,
+                "SI" :28.0855,
+                "Si" :28.0855,
+                "P" :30.9738,
+                "S" :32.065,
+                "CL" :35.453,
+                "Cl" :35.453,
+                "AR" :39.948,
+                "Ar" :39.948,
+                "K" :39.0983,
+                "CA" :40.078,
+                "Ca" :40.078,
+                "SC" :44.9559,
+                "Sc" :44.9559,
+                "TI" :47.867,
+                "Ti" :47.867,
+                "V" :50.9415,
+                "CR" :51.9961,
+                "Cr" :51.9961,
+                "MN" :54.938,
+                "Mn" :54.938,
+                "FE" :55.845,
+                "Fe" :55.845,
+                "CO" :58.9332,
+                "Co" :58.9332,
+                "NI" :58.6934,
+                "Ni" :58.6934,
+                "CU" :63.546,
+                "Cu" :63.546,
+                "ZN" :65.38,
+                "Zn" :65.38,
+                "GA" :69.723,
+                "Ga" :69.723,
+                "GE" :72.64,
+                "Ge" :72.64,
+                "AS" :74.9216,
+                "As" :74.9216,
+                "SE" :78.96,
+                "Se" :78.96,
+                "BR" :79.904,
+                "Br" :79.904,
+                "KR" :83.798,
+                "Kr" :83.798,
+                "RB" :85.4678,
+                "Rb" :85.4678,
+                "SR" :87.62,
+                "Sr" :87.62,
+                "Y" :88.9059,
+                "ZR" :91.224,
+                "Zr" :91.224,
+                "NB" :92.9064,
+                "Nb" :92.9064,
+                "MO" :95.96,
+                "Mo" :95.96,
+                "TC" :98,
+                "Tc" :98,
+                "RU" :101.07,
+                "Ru" :101.07,
+                "RH" :102.906,
+                "Rh" :102.906,
+                "PD" :106.42,
+                "Pd" :106.42,
+                "AG" :107.868,
+                "Ag" :107.868,
+                "CD" :112.411,
+                "Cd" :112.411,
+                "IN" :114.818,
+                "In" :114.818,
+                "SN" :118.71,
+                "Sn" :118.71,
+                "SB" :121.76,
+                "Sb" :121.76,
+                "TE" :127.6,
+                "Te" :127.6,
+                "I" :126.904,
+                "XE" :131.293,
+                "Xe" :131.293,
+                "CS" :132.905,
+                "Cs" :132.905,
+                "BA" :137.327,
+                "Ba" :137.327,
+                "LA" :138.905,
+                "La" :138.905,
+                "CE" :140.116,
+                "Ce" :140.116,
+                "PR" :140.908,
+                "Pr" :140.908,
+                "ND" :144.242,
+                "Nd" :144.242,
+                "PM" :145,
+                "Pm" :145,
+                "SM" :150.36,
+                "Sm" :150.36,
+                "EU" :151.964,
+                "Eu" :151.964,
+                "GD" :157.25,
+                "Gd" :157.25,
+                "TB" :158.925,
+                "Tb" :158.925,
+                "DY" :162.5,
+                "Dy" :162.5,
+                "HO" :164.93,
+                "Ho" :164.93,
+                "ER" :167.259,
+                "Er" :167.259,
+                "TM" :168.934,
+                "Tm" :168.934,
+                "YB" :173.054,
+                "Yb" :173.054,
+                "LU" :174.967,
+                "Lu" :174.967,
+                "HF" :178.49,
+                "Hf" :178.49,
+                "TA" :180.948,
+                "Ta" :180.948,
+                "W" :183.84,
+                "RE" :186.207,
+                "Re" :186.207,
+                "OS" :190.23,
+                "Os" :190.23,
+                "IR" :192.217,
+                "Ir" :192.217,
+                "PT" :195.084,
+                "Pt" :195.084,
+                "AU" :196.967,
+                "Au" :196.967,
+                "HG" :200.59,
+                "Hg" :200.59,
+                "TL" :204.383,
+                "Tl" :204.383,
+                "PB" :207.2,
+                "Pb" :207.2,
+                "BI" :208.98,
+                "Bi" :208.98,
+                "TH" :232.038,
+                "Th" :232.038,
+                "PA" :231.036,
+                "Pa" :231.036,
+                "U" :238.029,
+                "Xx":0.0,
+                "xx":0.0,
+                "XX":0.0
+            };
+            var s = new $3Dmol.GLShape({'wireframe' : true});
+            var atoms = getAtomsFromSel();
+            var data = model.getConnData();
+            var com = [0.0,0.0,0.0];
+            var natoms = atoms.length;
+            var mtot = 0.0
+            for (i=0;i<natoms;i++){
+                com[0] = com[0] + (masses[atoms[i].elem] * atoms[i].x);
+                com[1] = com[1] + (masses[atoms[i].elem] * atoms[i].y);
+                com[2] = com[2] + (masses[atoms[i].elem] * atoms[i].z);
+                mtot = mtot + masses[atoms[i].elem]
+            }
+            com[0] = com[0]/mtot
+            com[1] = com[1]/mtot
+            com[2] = com[2]/mtot
+            vcom = new $3Dmol.Vector3(com[0], com[1], com[2]);
+            this.center = vcom;
+            return vcom
+            //s.addSphere({color: 'blue', radius : 0.6,center : vcom});
+            //shapes.push(s);
+            //show();
+
+        }
+//
+//        this.addLabel = function(text, data) {
+//            var label = new $3Dmol.Label(text, data);
+//            label.setContext();
+//            modelGroup.add(label.sprite);
+//            labels.push(label);
+//            show();
+//            return label;
+ 
         
         
         /**
@@ -1556,7 +1971,7 @@ $3Dmol.GLViewer = (function() {
          * 
          * @function $3Dmol.GLViewer#addModel
          * @param {string} data - Input data
-         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', or 'mol2')
+         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', 'txyz', or 'mol2')
          * @return {$3Dmol.GLModel}
          */
         this.addModel = function(data, format, options) {
@@ -1573,7 +1988,7 @@ $3Dmol.GLViewer = (function() {
          * 
          * @function $3Dmol.GLViewer#addModels
          * @param {string} data - Input data
-         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', or 'mol2')
+         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', 'txyz', or 'mol2')
          * @return {Array<$3Dmol.GLModel>}
          */
         this.addModels = function(data, format, options) {
@@ -1603,7 +2018,7 @@ $3Dmol.GLViewer = (function() {
          * 
          * @function $3Dmol.GLViewer#addModelsAsFrames
          * @param {string} data - Input data
-         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', or 'mol2')
+         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', 'txyz', or 'mol2')
          * @return {$3Dmol.GLModel}
          */
         this.addModelsAsFrames = function(data, format, options) {
@@ -1623,7 +2038,7 @@ $3Dmol.GLViewer = (function() {
          * 
          * @function $3Dmol.GLViewer#addAsOneMolecule
          * @param {string} data - Input data
-         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', or 'mol2')
+         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', 'txyz', or 'mol2')
          * @return {$3Dmol.GLModel}
          */
         this.addAsOneMolecule = function(data, format, options) {
