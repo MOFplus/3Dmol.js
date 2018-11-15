@@ -11,11 +11,11 @@ if "HTTP_REFERER" in os.environ:
 
 conn = MySQLdb.connect (host = "localhost",user = "tracker",db="3dmoltrack")
 cursor = conn.cursor()
-cursor.execute("INSERT INTO accessed (host,domain) VALUES(%s,%s)",(host,domain))
+cursor.execute("INSERT INTO accessed (host,domain) VALUES(%s,%s)",(host,domain[:111]))
 conn.commit()
 cursor.close()
 conn.close()
 
 print "Content-Type: text/html"     # HTML is following
-print "Access-Control-Allow-Origin: *" # allow cross-site scripting
+#print "Access-Control-Allow-Origin: *" # allow cross-site scripting - disabled since enabled on server
 print                               # blank line, end of headers

@@ -1,3 +1,4 @@
+/node_modules
 /nbproject/private/
 /Jmol
 /js/Detector.js
@@ -12,4 +13,5 @@ script.map
 my_pdbs/
 build
 doc
+doc/scripts/toc.js
 .DS_Store

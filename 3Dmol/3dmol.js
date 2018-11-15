@@ -9,11 +9,15 @@
 $3Dmol = (function(window) {
     
     var my = window['$3Dmol'] || {};
-    //var $ = window['jQuery'];
     
     return my;
 
 })(window);
+
+if ( typeof module === "object" && typeof module.exports === "object" ) { 
+	//for node.js exporting
+	module.exports = $3Dmol; 
+}
 
 /* The following code "phones home" to register that an ip 
    address has loaded 3Dmol.js.  Being able track this usage
@@ -21,8 +25,8 @@ $3Dmol = (function(window) {
    leave this code in if you would like to increase the 
    likelihood of 3Dmol.js remaining supported.
 */
-if('https:' != document.location.protocol) { //not willing to pay for ssl cert
-    $.get("http://3dmol.csb.pitt.edu/track/report.cgi");
+if(!$3Dmol.notrack) {
+ $.get("https://3dmol.csb.pitt.edu/track/report.cgi");
 }
 
 /* shims for IE */
@@ -41,26 +45,81 @@ if (!String.prototype.endsWith) {
         return this.indexOf(suffix, this.length - suffix.length) !== -1;
     };
 }
+
+/**
+*
+* jquery.binarytransport.js
+*
+* @description. jQuery ajax transport for making binary data type requests.
+* @version 1.0 
+* @author Henry Algus <henryalgus@gmail.com>
+*
+*/
+
+// use this transport for "binary" data type
+$.ajaxTransport(
+               "+binary",
+               function(options, originalOptions, jqXHR) {
+                   // check for conditions and support for blob / arraybuffer response type
+                   if (window.FormData
+                           && ((options.dataType && (options.dataType == 'binary')) || (options.data && ((window.ArrayBuffer && options.data instanceof ArrayBuffer) || (window.Blob && options.data instanceof Blob))))) {
+                       return {
+                           // create new XMLHttpRequest
+                           send : function(headers, callback) {
+                               // setup all variables
+                               var xhr = new XMLHttpRequest(), url = options.url, type = options.type, async = options.async || true,
+                               // blob or arraybuffer. Default is blob
+                               dataType = options.responseType || "blob", data = options.data
+                                       || null, username = options.username
+                                       || null, password = options.password
+                                       || null;
+
+                               var xhrret = function() {
+                                   var data = {};
+                                   data[options.dataType] = xhr.response;
+                                   // make callback and send data
+                                   callback(xhr.status, xhr.statusText,
+                                           data,
+                                           xhr.getAllResponseHeaders());
+                               };
+                               
+                               xhr.addEventListener('load', xhrret);
+                               xhr.addEventListener('error', xhrret);
+                               xhr.addEventListener('abort', xhrret);
+                               
+                               xhr.open(type, url, async, username,
+                                       password);
+
+                               // setup custom headers
+                               for ( var i in headers) {
+                                   xhr.setRequestHeader(i, headers[i]);
+                               }
+
+                               xhr.responseType = dataType;
+                               xhr.send(data);
+                           },
+                           abort : function() {
+                               jqXHR.abort();
+                           }
+                       };
+                   }
+               });
+
     
 /**
  * Create and initialize an appropriate viewer at supplied HTML element using specification in config
+ @function $3Dmol.createViewer
  * @param {Object | string} element - Either HTML element or string identifier
  * @param {ViewerSpec} config Viewer specification
  * @return {$3Dmol.GLViewer} GLViewer, null if unable to instantiate WebGL
- * 
  * @example
- * // Assume there exists an HTML div with id "gldiv"
- * var element = $("#gldiv");
- * 
- * // Viewer config - properties 'defaultcolors' and 'callback'
- * var config = {defaultcolors: $3Dmol.rasmolElementColors };
- * 
- * // Create GLViewer within 'gldiv' 
- * var myviewer = $3Dmol.createViewer(element, config);
- * //'data' is a string containing molecule data in pdb format  
- * myviewer.addModel(data, "pdb");
- * myviewer.zoomTo();
- * myviewer.render();                        
+   var viewer = $3Dmol.createViewer(
+     'gldiv', //id of div to create canvas in
+     {
+       defaultcolors: $3Dmol.elementColors.rasmol,
+       backgroundColor: 'black'
+     }
+   );
  *                        
  */
 $3Dmol.createViewer = function(element, config)
@@ -81,6 +140,92 @@ $3Dmol.createViewer = function(element, config)
     
     return null;
 };
+
+/**
+ * Create and initialize an appropriate a grid of viewers that share a WebGL canvas
+ @function $3Dmol.createViewerGrid
+ * @param {Object | string} element - Either HTML element or string identifier
+ * @param {GridSpec} grid configuration
+ * @param {ViewerGridSpec} config Viewer specification to apply to all subviewers
+ * @return [[$3Dmol.GLViewer]] 2D array of GLViewers
+ * @example                    
+   var viewers = $3Dmol.createViewerGrid(
+     'gldiv', //id of div to create canvas in
+     {
+       rows: 2,
+       cols: 2,
+       control_all: true  //mouse controls all viewers
+     },
+     { backgroundColor: 'lightgrey' }
+   );
+   $.get('data/1jpy.cif', function(data) {
+     var viewer = viewers[0][0];
+     viewer.addModel(data,'cif');
+     viewer.setStyle({sphere:{}});
+     viewer.zoomTo();
+     viewer.render( );
+
+     viewer = viewers[0][1];
+     viewer.addModel(data,'cif');
+     viewer.setStyle({stick:{}});
+     viewer.zoomTo();     
+     viewer.render( );
+     
+     viewer = viewers[1][0];
+     viewer.addModel(data,'cif');
+     viewer.setStyle({cartoon:{color:'spectrum'}});
+     viewer.zoomTo();     
+     viewer.render( );
+     
+     viewer = viewers[1][1];
+     viewer.addModel(data,'cif');
+     viewer.setStyle({cartoon:{colorscheme:'chain'}});
+     viewer.zoomTo();     
+     viewer.render();
+     
+     
+   });
+     
+ */
+$3Dmol.createViewerGrid  = function(element,config,viewer_config){
+    if($.type(element) === "string")
+        element = $("#"+element);
+    if(!element) return;
+
+    config = config || {}; 
+    viewer_config = viewer_config || {};
+    
+    var viewers = [];
+
+    //create canvas
+    var canvas = document.createElement('canvas');
+
+    viewer_config.rows = config.rows;
+    viewer_config.cols = config.cols;
+    viewer_config.control_all = config.control_all != undefined ? config.control_all : false;
+    $(element).append($(canvas));
+
+      //try to create the  viewer
+    try {  
+      for(var r =0;r<config.rows;r++){
+        var row = new Array();
+        for(var c = 0;c<config.cols;c++){
+          viewer_config.row = r;
+          viewer_config.col = c;
+          viewer_config.canvas = canvas;
+          viewer_config.viewers = viewers;
+          viewer_config.control_all = config.control_all;
+          var viewer = $3Dmol.createViewer(element, viewer_config);
+          row.push(viewer)
+        }
+        viewers.unshift(row); //compensate for weird ordering in renderer
+      }
+    }catch(e) {
+        throw "error creating viewer grid: "+e;
+    }
+    
+    return viewers;
+}
    
 /**
  * Contains a dictionary of embedded viewers created from HTML elements
@@ -90,8 +235,53 @@ $3Dmol.createViewer = function(element, config)
 $3Dmol.viewers = {};
 
 /**
+ * Download binary data (e.g. a gzipped file) into an array buffer and provide
+ * arraybuffer to callback.
+ * @function $3Dmol.getbin
+ * @param {string} uri - location of data
+ * @param {Function} callback - Function to call with arraybuffer as argument.  
+ * @param {string} request - type of request
+ * @return {Promise}
+ */ 
+$3Dmol.getbin = function(uri, callback, request,postdata) {
+    var promise = new Promise(function(resolve, reject) {
+        
+        request = (request == undefined)?"GET":request;
+        $.ajax({url:uri, 
+            dataType: "binary",
+            method: request,
+            data: postdata,
+            responseType: "arraybuffer",
+            processData: false})
+        .done(function(ret, txt, response) {
+            resolve(ret);
+        })
+        .fail(function(e,txt) { 
+            console.log(txt);
+            reject();
+        });
+    });
+    if (callback) return promise.then(callback);
+    else return promise;
+};
+
+/**
+ * Convert a base64 encoded string to a Uint8Array
+ * @function $3Dmol.base64ToArray
+ * @param {string} base64 encoded string
+ */
+$3Dmol.base64ToArray = function(base64) {
+    var binary_string =  window.atob(base64);
+    var len = binary_string.length;
+    var bytes = new Uint8Array( len );
+    for (var i = 0; i < len; i++)        {
+        bytes[i] = binary_string.charCodeAt(i);
+    }
+    return bytes;
+}
+
+/**
  * Load a PDB/PubChem structure into existing viewer. Automatically calls 'zoomTo' and 'render' on viewer after loading model
- * 
  * @function $3Dmol.download
  * @param {string} query - String specifying pdb or pubchem id; must be prefaced with "pdb: " or "cid: ", respectively
  * @param {$3Dmol.GLViewer} viewer - Add new model to existing viewer
@@ -99,52 +289,107 @@ $3Dmol.viewers = {};
  *                           format: file format to download, if multiple are available, default format is pdb
  *                           pdbUri: URI to retrieve PDB files, default URI is http://www.rcsb.org/pdb/files/
  * @param {Function} callback - Function to call with model as argument after data is loaded.
-
+  
+ * @return {$3Dmol.GLModel} GLModel, Promise if callback is not provided
  * @example
- * var myviewer = $3Dmol.createViewer(gldiv);
- * 
- * // GLModel 'm' created and loaded into glviewer for PDB id 2POR
- * // Note that m will not contain the atomic data until after the network request is completed
- * var m = $3Dmol.download('pdb: 2POR', myviewer, {format:'cif'});
- * 
- * @return {$3Dmol.GLModel} GLModel
+ viewer.setBackgroundColor(0xffffffff);
+       $3Dmol.download('pdb:2nbd',viewer,{onemol: true,multimodel: true},function(m) {
+        m.setStyle({'cartoon':{colorscheme:{prop:'ss',map:$3Dmol.ssColors.Jmol}}});
+       viewer.zoomTo();
+       viewer.render(callback);
+    });
  */ 
 $3Dmol.download = function(query, viewer, options, callback) {
     var baseURL = '';
     var type = "";
     var pdbUri = "";
+    var mmtfUri = "";
     var m = viewer.addModel();
-    if (query.substr(0, 4) === 'pdb:') {
-        pdbUri = options && options.pdbUri ? options.pdbUri : "http://www.rcsb.org/pdb/files/";
-        type = options && options.format ? options.format : "pdb";
-        query = query.substr(4).toUpperCase();
-        if (!query.match(/^[1-9][A-Za-z0-9]{3}$/)) {
-           alert("Wrong PDB ID"); return;
+    if (query.substr(0, 5) === 'mmtf:') {
+        pdbUri = options && options.pdbUri ? options.pdbUri : "https://mmtf.rcsb.org/v1.0/full/";
+        query = query.substr(5).toUpperCase();
+        var uri = pdbUri + query;        
+        if(options && typeof options.noComputeSecondaryStructure === 'undefined') {
+                //when fetch directly from pdb, trust structure annotations
+                options.noComputeSecondaryStructure = true;
         }
-        if (options && options.format)
-            uri = pdbUri + query + "." + options.format;
-        else
-            uri = pdbUri + query + ".pdb";
-
-    } else if (query.substr(0, 4) == 'cid:') {
-        type = "sdf";
-        query = query.substr(4);
-        if (!query.match(/^[0-9]+$/)) {
-           alert("Wrong Compound ID"); return;
-        }
-        uri = "http://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/" + query + 
-          "/SDF?record_type=3d";
+        var promise = new Promise(function(resolve, reject) {
+            $3Dmol.getbin(uri)
+            .then(function(ret) {
+                m.addMolData(ret, 'mmtf',options);
+                viewer.zoomTo();
+                viewer.render();
+                resolve(m);
+            });
+        });
     }
-
-   $.get(uri, function(ret) {
-      m.addMolData(ret, type, options);
-      viewer.zoomTo();
-      viewer.render();
-      if(callback) callback(m);
-
-   });
-   
-   return m;
+    else {
+        if (query.substr(0, 4) === 'pdb:') {
+            type = 'mmtf';
+            if(options && options.format) {
+                type = options.format; //can override and require pdb
+            }
+            
+            if(options && typeof options.noComputeSecondaryStructure === 'undefined') {
+                //when fetch directly from pdb, trust structure annotations
+                options.noComputeSecondaryStructure = true;
+            }
+            query = query.substr(4).toUpperCase();
+            if (!query.match(/^[1-9][A-Za-z0-9]{3}$/)) {
+               alert("Wrong PDB ID"); return;
+            }
+            if(type == 'mmtf') {
+                mmtfUri = options && options.mmtfUri ? options.mmtfUri : 'https://mmtf.rcsb.org/v1.0/full/';
+                uri = mmtfUri + query.toUpperCase();
+            }
+            else  {
+                pdbUri = options && options.pdbUri ? options.pdbUri : "https://files.rcsb.org/view/";
+                uri = pdbUri + query + "." + type;
+            }
+    
+        } else if (query.substr(0, 4) == 'cid:') {
+            type = "sdf";
+            query = query.substr(4);
+            if (!query.match(/^[0-9]+$/)) {
+               alert("Wrong Compound ID"); return;
+            }
+            uri = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/" + query + 
+              "/SDF?record_type=3d";
+        } else if (query.substr(0,4) == 'url:') {
+            uri = query.substr(4);
+            type = uri;
+        }
+    
+        var handler = function(ret) {
+            m.addMolData(ret, type, options);
+            viewer.zoomTo();
+            viewer.render();
+        };
+        var promise = new Promise(function(resolve, reject) {
+            if(type == 'mmtf') { //binary data
+                $3Dmol.getbin(uri)
+                .then(function(ret) {
+                    handler(ret);
+                    resolve(m);
+                });
+            }
+            else {        
+               $.get(uri, function(ret) {
+                   handler(ret);
+                   resolve(m);
+               }).fail(function(e) {
+                   console.log("fetch of "+uri+" failed: "+e.statusText);
+               });
+            }
+        });
+    }
+    if (callback) {
+        promise.then(function(m){
+            callback(m);
+        });
+        return m;
+    }
+    else return promise;
 };
        
 
@@ -192,7 +437,7 @@ $3Dmol.multiLineString = function(f) {
 $3Dmol.syncSurface = false;
 
 // Internet Explorer refuses to allow webworkers in data blobs.  I can find
-// no way of checking for this feature directly, so must do a brower check
+// no way of checking for this feature directly, so must do a browser check
 if(window.navigator.userAgent.indexOf('MSIE ') >= 0 ||
         window.navigator.userAgent.indexOf('Trident/') >= 0) {
     $3Dmol.syncSurface = true; // can't use webworkers
@@ -232,7 +477,7 @@ $3Dmol.specStringToObject = function(str) {
            else if(val.indexOf('.') >= 0) {
                return parseFloat(val); // ".7" for example, does not parseInt
            }
-           else {
+           else{
                return parseInt(val);
            }
         }
@@ -275,7 +520,7 @@ $3Dmol.specStringToObject = function(str) {
         ret[f] = val;
     }
 
-return ret;
+  return ret;
 }
 
 
@@ -377,3 +622,75 @@ $3Dmol.getPropertyRange = function (atomlist, prop) {
     return [ min, max ];
 }
 
+//hackish way to work with requirejs - doesn't actually work yet
+//since we doing use the require optimizer to combine modules
+if( typeof(define) === 'function' && define.amd) {
+    define('$3Dmol',$3Dmol);
+}
+
+/* StereoViewer for stereoscopic viewing
+  @function $3Dmol.createStereoViewer
+* @param {Object | string} element - Either HTML element or string identifier
+* 
+*/
+
+$3Dmol.createStereoViewer = function(element) {
+    var that = this;
+    if($.type(element) === "string")
+        element = $("#"+element);
+    if(!element) return;
+    
+    var viewers = $3Dmol.createViewerGrid(element, {rows: 1, cols: 2, control_all: true});
+    
+    this.glviewer1 = viewers[0][0];
+    this.glviewer2 = viewers[0][1];
+    
+    this.glviewer1.setAutoEyeSeparation(false);
+    this.glviewer2.setAutoEyeSeparation(true);    
+
+    this.glviewer1.linkViewer(this.glviewer2);
+    this.glviewer2.linkViewer(this.glviewer1);
+
+    var methods = Object.getOwnPropertyNames(this.glviewer1) //get all methods of glviewer object
+    .filter(function(property) {
+        return typeof that.glviewer1[property] == 'function';
+    });
+
+    for (var i = 0; i < methods.length; i++) { //create methods of the same name
+        this[methods[i]] = (function(method){
+            return function(){
+                var m1=this['glviewer1'][method].apply(this['glviewer1'],arguments);
+                var m2=this['glviewer2'][method].apply(this['glviewer2'],arguments);
+                return [m1,m2];
+            };
+        })(methods[i]);
+    }
+    
+    //special cased methods
+    this.setCoordinates = function (models, data, format) { //for setting the coordinates of the models
+        for (var i = 0; i < models.length; i++) {
+            models[i].setCoordinates(data, format);
+        }
+    };
+    
+    this.surfacesFinished = function() {
+        return this.glviewer1.surfacesFinished() && this.glviewer2.surfacesFinished();
+    };
+    
+    this.isAnimated = function() {
+        return this.glviewer1.isAnimated() || this.glviewer2.isAnimated();
+    };
+    
+    this.render = function(callback) {
+        this.glviewer1.render();
+        this.glviewer2.render();
+        if(callback) {
+            callback(this); //call only once
+        }
+    };
+    
+    this.getCanvas = function() {
+        return this.glviewer1.getCanvas(); //same for both
+    };
+
+}

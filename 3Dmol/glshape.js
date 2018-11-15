@@ -6,6 +6,9 @@
  * @param {number} sid - Unique identifier
  * @param {ShapeSpec} stylespec - shape style specification
  */
+
+ 
+
 $3Dmol.GLShape = (function() {
 
     // Marching cube, to match with protein surface generation
@@ -478,7 +481,7 @@ $3Dmol.GLShape = (function() {
             center.divideScalar(cnt);
             
             
-            updateBoundingFromPoints(shape.boundingSphere, {centroid: center}, vertexArray);
+            updateBoundingFromPoints(shape.boundingSphere, {centroid: center}, vertexArray, geoGroup.vertices);
         }
 
         geoGroup.faceArray = new Uint16Array(faceArr);
@@ -544,11 +547,12 @@ $3Dmol.GLShape = (function() {
      * @param {$3Dmol.Sphere}
      *            sphere
      * @param {Object}
-     *            components
+     *            components, centroid of all objects in shape
      * @param {Array}
-     *            points
+     *            points, flat array of all points in shape
+     * @param {int} numPoints, number of valid poitns in points
      */
-    var updateBoundingFromPoints = function(sphere, components, points) {
+    var updateBoundingFromPoints = function(sphere, components, points, numPoints) {
 
         sphere.center.set(0, 0, 0);
 
@@ -565,8 +569,10 @@ $3Dmol.GLShape = (function() {
         }
 
         var maxRadiusSq = sphere.radius * sphere.radius;
-
-        for (i = 0, il = points.length / 3; i < il; i++) {
+        if(points.length/3 < numPoints)
+            numPoints = points.length/3;
+            
+        for (i = 0, il = numPoints; i < il; i++) {
             var x = points[i * 3], y = points[i * 3 + 1], z = points[i * 3 + 2];
             var radiusSq = sphere.center.distanceToSquared({
                 x : x,
@@ -593,6 +599,8 @@ $3Dmol.GLShape = (function() {
             shape.color = stylespec.color || new $3Dmol.Color();
             if(! (stylespec.color instanceof $3Dmol.Color))
                 shape.color = $3Dmol.CC.color(stylespec.color);
+        } else {
+            shape.color = $3Dmol.CC.color(0);
         }
         shape.wireframe = stylespec.wireframe ? true : false;
         //opacity is the preferred nomenclature, support alpha for backwards compat
@@ -609,6 +617,14 @@ $3Dmol.GLShape = (function() {
         shape.clickable = stylespec.clickable ? true : false;
         shape.callback = typeof (stylespec.callback) === "function" ? stylespec.callback
                 : null;
+
+        shape.hoverable = stylespec.hoverable ? true : false;
+        shape.hover_callback = typeof (stylespec.hover_callback) === "function" ? stylespec.hover_callback
+                : null;
+
+        shape.unhover_callback = typeof (stylespec.unhover_callback) === "function" ? stylespec.unhover_callback
+                : null;
+
         shape.hidden = stylespec.hidden;
     };
 
@@ -646,6 +662,7 @@ $3Dmol.GLShape = (function() {
         var linegeo = new $3Dmol.Geometry(true);
 
         /** Update shape with new style specification
+	 * @function $3Dmol.GLShape#updateStyle
          * @param {ShapeSpec} newspec
          * @return {$3Dmol.GLShape}
          */
@@ -661,8 +678,9 @@ $3Dmol.GLShape = (function() {
         /**
          * Creates a custom shape from supplied vertex and face arrays
          * @function $3Dmol.GLShape#addCustom
-         * @param {CustomSpec} customSpec
+         * @param {CustomShapeSpec} customSpec
          * @return {$3Dmol.GLShape}
+         
          */
         this.addCustom = function(customSpec) {
 
@@ -680,6 +698,10 @@ $3Dmol.GLShape = (function() {
          * @function $3Dmol.GLShape#addSphere
          * @param {SphereSpec} sphereSpec
          * @return {$3Dmol.GLShape}
+         @example 
+         viewer.addSphere({center:{x:0,y:0,z:0},radius:10.0,color:'red'});
+         
+         viewer.render();
          */
         this.addSphere = function(sphereSpec) {
 
@@ -705,19 +727,155 @@ $3Dmol.GLShape = (function() {
             var geoGroup = geo.updateGeoGroup(0);
             
             updateBoundingFromPoints(this.boundingSphere, components,
-                    geoGroup.vertexArray);
+                    geoGroup.vertexArray, geoGroup.vertices);
         };
 
+
+        /**
+         * Creates a box
+         * @function $3Dmol.GLShape#addBox
+         * @param {BoxSpec} boxSpec
+         * @return {$3Dmol.GLShape}
+         @example 
+         var shape = viewer.addShape({color:'red'});
+         shape.addBox({corner: {x:1,y:2,z:0}, dimensions: {w: 4, h: 2, d: 6}});
+         shape.addBox({corner: {x:-5,y:-3,z:0},
+                       dimensions: { w: {x:1,y:1,z:0},
+                                     h: {x:-1,y:1,z:0},
+                                     d: {x:0,y:0,z:1} }});
+         viewer.zoomTo();
+         viewer.rotate(30);
+         viewer.render();
+         */
+        this.addBox = function(boxSpec) {
+
+            var dim = boxSpec.dimensions || { w: 1, h:1, d: 1};
+
+            //dimensions may be scalar or vector quantities
+            var w = dim.w;
+            if(typeof(dim.w) == "number") {
+                w = {x:dim.w,y:0,z:0};
+            }
+            var h = dim.h;
+            if(typeof(dim.h) == "number") {
+                h = {x:0,y:dim.h,z:0};
+            }
+            var d = dim.d;
+            if(typeof(dim.d) == "number") {
+                d = {x:0,y:0,z:dim.d};
+            }
+            
+            //can position using corner OR center
+            var c = boxSpec.corner
+            if(c == undefined) {
+                if(boxSpec.center !== undefined) {
+                    
+                    c  = {x: boxSpec.center.x - 0.5*(w.x+h.x+d.x),
+                          y: boxSpec.center.y - 0.5*(w.y+h.y+d.y),
+                          z: boxSpec.center.z - 0.5*(w.z+h.z+d.z)}
+                } else { // default to origin
+                    c = {x:0,y:0,z:0};
+                }
+            }
+            
+            //8 vertices
+            var uv = 
+                [{x: c.x, y: c.y, z:c.z},
+                 {x: c.x+w.x, y: c.y+w.y, z:c.z+w.z},
+                 {x: c.x+h.x, y: c.y+h.y, z:c.z+h.z},
+                 {x: c.x+w.x+h.x, y: c.y+w.y+h.y, z:c.z+w.z+h.z},
+                 {x: c.x+d.x, y: c.y+d.y, z:c.z+d.z},
+                 {x: c.x+w.x+d.x, y: c.y+w.y+d.y, z:c.z+w.z+d.z},
+                 {x: c.x+h.x+d.x, y: c.y+h.y+d.y, z:c.z+h.z+d.z},
+                 {x: c.x+w.x+h.x+d.x, y: c.y+w.y+h.y+d.y, z:c.z+w.z+h.z+d.z}];
+                 
+            //but.. so that we can have sharp issues, we want a unique normal
+            //for each face - since normals are associated with vertices, need to duplicate 
+            
+            //bottom
+            // 0 1
+            // 2 3
+            //top
+            // 4 5
+            // 6 7
+            var verts = [];
+            var faces = [];
+            //bottom
+            verts.splice(verts.length, 0, uv[0],uv[1],uv[2],uv[3]);
+            faces.splice(faces.length,0, 0,2,1, 1,2,3);
+            var foff = 4;
+            //front
+            verts.splice(verts.length, 0, uv[2],uv[3],uv[6],uv[7]);
+            faces.splice(faces.length,0, foff+0,foff+2,foff+1, foff+1,foff+2,foff+3); 
+            foff += 4;   
+            //back
+            verts.splice(verts.length, 0, uv[4],uv[5],uv[0],uv[1]);
+            faces.splice(faces.length,0, foff+0,foff+2,foff+1, foff+1,foff+2,foff+3); 
+            foff += 4;   
+            //top
+            verts.splice(verts.length, 0, uv[6],uv[7],uv[4],uv[5]);
+            faces.splice(faces.length,0, foff+0,foff+2,foff+1, foff+1,foff+2,foff+3); 
+            foff += 4;  
+            //right
+            verts.splice(verts.length, 0, uv[3],uv[1],uv[7],uv[5]);
+            faces.splice(faces.length,0, foff+0,foff+2,foff+1, foff+1,foff+2,foff+3); 
+            foff += 4;  
+            //left
+            verts.splice(verts.length, 0, uv[2],uv[0],uv[6],uv[4]);
+            faces.splice(faces.length,0, foff+0,foff+2,foff+1, foff+1,foff+2,foff+3); 
+            foff += 4; 
+                                    
+            var spec = $.extend({},boxSpec);
+            spec.vertexArr = verts;
+            spec.faceArr = faces;
+            spec.normalArr = [];
+            drawCustom(this, geo, spec);
+            
+            var centroid = new $3Dmol.Vector3();
+            components.push({
+                centroid : centroid.addVectors(uv[0],uv[7]).multiplyScalar(0.5)
+            });
+            var geoGroup = geo.updateGeoGroup(0);
+            updateBoundingFromPoints(this.boundingSphere, components, geoGroup.vertexArray, geoGroup.vertices);
+        };
+        
         /**
          * Creates a cylinder shape
          * @function $3Dmol.GLShape#addCylinder
          * @param {CylinderSpec} cylinderSpec
          * @return {$3Dmol.GLShape}
+         @example
+              viewer.addCylinder({start:{x:0.0,y:0.0,z:0.0},
+                                  end:{x:10.0,y:0.0,z:0.0},
+                                  radius:1.0,
+                                  fromCap:1,
+                                  toCap:2,
+                                  color:'red',
+                                  hoverable:true,
+                                  clickable:true,
+                                  callback:function(){ this.color.setHex(0x00FFFF00);viewer.render( );},
+                                  hover_callback: function(){ viewer.render( );},
+                                  unhover_callback: function(){ this.color.setHex(0xFF000000);viewer.render( );}
+                                 });
+              viewer.addCylinder({start:{x:0.0,y:2.0,z:0.0},
+                                  end:{x:0.0,y:10.0,z:0.0},
+                                  radius:0.5,
+                                  fromCap:false,
+                                  toCap:true,
+                                  color:'teal'});
+              viewer.addCylinder({start:{x:15.0,y:0.0,z:0.0},
+                                  end:{x:20.0,y:0.0,z:0.0},
+                                  radius:1.0,
+                                  color:'black',
+                                  fromCap:false,
+                                  toCap:false});
+              viewer.render();
          */
         this.addCylinder = function(cylinderSpec) {
 
             cylinderSpec.start = cylinderSpec.start || {};
             cylinderSpec.end = cylinderSpec.end || {};
+
 
             var start = new $3Dmol.Vector3(cylinderSpec.start.x || 0,
                     cylinderSpec.start.y || 0, cylinderSpec.start.z || 0);
@@ -731,22 +889,158 @@ $3Dmol.GLShape = (function() {
             this.intersectionShape.cylinder.push(new $3Dmol.Cylinder(start, end, radius));
 
             $3Dmol.GLDraw.drawCylinder(geo, start, end, radius, color, cylinderSpec.fromCap, cylinderSpec.toCap);            
-            
+           
             var centroid = new $3Dmol.Vector3();
             components.push({
                 centroid : centroid.addVectors(start,end).multiplyScalar(0.5)
             });
             var geoGroup = geo.updateGeoGroup(0);
             updateBoundingFromPoints(this.boundingSphere, components,
-                    geoGroup.vertexArray);
+                    geoGroup.vertexArray, geoGroup.vertices);
 
         };
 
+        /**
+         * Creates a dashed cylinder shape
+         * @function $3Dmol.GLShape#addDashedCylinder
+         * @param {CylinderSpec} cylinderSpec
+         * @return {$3Dmol.GLShape}       
+         */
+        this.addDashedCylinder = function(cylinderSpec){
+            cylinderSpec.start = cylinderSpec.start || {};
+            cylinderSpec.end = cylinderSpec.end || {};
+            cylinderSpec.dashLength=cylinderSpec.dashLength || .25;
+            cylinderSpec.gapLength=cylinderSpec.gapLength || .25;
+
+            var start = new $3Dmol.Vector3(cylinderSpec.start.x || 0,
+                    cylinderSpec.start.y || 0, cylinderSpec.start.z || 0);
+            var end = new $3Dmol.Vector3(cylinderSpec.end.x,
+                    cylinderSpec.end.y || 0, cylinderSpec.end.z || 0);
+            if(typeof(end.x) == 'undefined') end.x = 3; //show something even if undefined
+
+            var radius = cylinderSpec.radius || 0.1;
+            var color = $3Dmol.CC.color(cylinderSpec.color);
+
+            var cylinderLength = Math.sqrt(Math.pow((start.x-end.x),2)+Math.pow((start.y-end.y),2)+Math.pow((start.z-end.z),2));
+
+            var count = cylinderLength/(cylinderSpec.gapLength+cylinderSpec.dashLength);
+
+            var new_start = new $3Dmol.Vector3(cylinderSpec.start.x || 0,
+                    cylinderSpec.start.y || 0, cylinderSpec.start.z || 0);
+            var new_end = new $3Dmol.Vector3(cylinderSpec.end.x,
+                    cylinderSpec.end.y || 0, cylinderSpec.end.z || 0);
+
+            var gapVector = new $3Dmol.Vector3((end.x-start.x)/(cylinderLength/cylinderSpec.gapLength),(end.y-start.y)/(cylinderLength/cylinderSpec.gapLength),(end.z-start.z)/(cylinderLength/cylinderSpec.gapLength));
+            var dashVector = new $3Dmol.Vector3((end.x-start.x)/(cylinderLength/cylinderSpec.dashLength),(end.y-start.y)/(cylinderLength/cylinderSpec.dashLength),(end.z-start.z)/(cylinderLength/cylinderSpec.dashLength));
+
+            for(var place=0; place < count;place++){
+                new_end = new $3Dmol.Vector3(new_start.x+dashVector.x,new_start.y+dashVector.y,new_start.z+dashVector.z);
+
+                this.intersectionShape.cylinder.push(new $3Dmol.Cylinder(new_start, new_end, radius));
+
+                $3Dmol.GLDraw.drawCylinder(geo, new_start, new_end, radius, color, cylinderSpec.fromCap, cylinderSpec.toCap); 
+
+                new_start = new $3Dmol.Vector3(new_end.x+gapVector.x,new_end.y+gapVector.y,new_end.z+gapVector.z);
+           
+            }
+            var centroid = new $3Dmol.Vector3();
+            components.push({
+                centroid : centroid.addVectors(start,end).multiplyScalar(0.5)
+            });
+            var geoGroup = geo.updateGeoGroup(0);
+            updateBoundingFromPoints(this.boundingSphere, components,
+                    geoGroup.vertexArray, geoGroup.vertices);
+        }
+
+        /**
+         * Creates a curved shape
+         * @function $3Dmol.GLShape#addCurve
+         * @param {CurveSpec} curveSpec
+         * @return {$3Dmol.GLShape}
+         */
+        this.addCurve = function(curveSpec) {
+
+            curveSpec.points = curveSpec.points || [];            
+            curveSpec.smooth = curveSpec.smooth || 10;   
+            if(typeof(curveSpec.fromCap) == "undefined") curveSpec.fromCap = 2;           
+            if(typeof(curveSpec.toCap) == "undefined") curveSpec.toCap = 2;           
+
+            //subdivide into smoothed spline points
+            var points = $3Dmol.subdivide_spline(curveSpec.points, curveSpec.smooth);
+            
+            if(points.length < 3) {
+                console.log("Too few points in addCurve");
+                return;
+            }
+
+            var radius = curveSpec.radius || 0.1;
+            var color = $3Dmol.CC.color(curveSpec.color);
+            //TODO TODO - this is very inefficient, should create our
+            //own water tight model with proper normals...
+            
+            
+            //if arrows are requested, peel off enough points to fit
+            //at least 2*r of arrowness
+            var start = 0;
+            var end = points.length-1;
+            var segmentlen = points[0].distanceTo(points[1]);
+            var npts = Math.ceil(2*radius/segmentlen);
+            if(curveSpec.toArrow) {
+                end -= npts;
+                var arrowspec = { start: points[end],
+                                  end: points[points.length-1],
+                                  radius: radius,
+                                  color: color,
+                                  mid: 0.0001
+                              };
+                this.addArrow(arrowspec);
+            }
+            if(curveSpec.fromArrow) {
+                start += npts;
+                var arrowspec = { start: points[start],
+                                  end: points[0],
+                                  radius: radius,
+                                  color: color,
+                                  mid: 0.0001
+                              };
+                this.addArrow(arrowspec);
+            }            
+            
+            var midway = Math.ceil(points.length/2);
+            var middleSpec = { radius: radius, color: color, fromCap: 2, toCap: 2 };            
+            for(var i=start; i < end; i++){
+                middleSpec.start = points[i];
+                middleSpec.end = points[i+1];
+                middleSpec.fromCap = 2;
+                middleSpec.toCap = 2;
+                if(i < midway) {
+                    middleSpec.fromCap = 2;
+                    middleSpec.toCap = 0;
+                } else if(i > midway) {
+                    middleSpec.fromCap = 0;
+                    middleSpec.toCap = 2;
+                } else {
+                    middleSpec.fromCap = 2;
+                    middleSpec.toCap = 2;                    
+                }
+                
+                this.addCylinder(middleSpec);
+            }
+            
+
+        };
+        
         /**
          * Creates a line shape
          * @function $3Dmol.GLShape#addLine         
          * @param {LineSpec} lineSpec
          * @return {$3Dmol.GLShape}
+         @example
+         $3Dmol.download("pdb:2ABJ",viewer,{},function(){
+                  viewer.addLine({dashed:true,start:{x:0,y:0,z:0},end:{x:100,y:100,z:100}});
+                  viewer.render(callback);
+              });
+
          */
         this.addLine = function(lineSpec) {
             lineSpec.start = lineSpec.start || {};
@@ -780,12 +1074,36 @@ $3Dmol.GLShape = (function() {
             lineArray[li+1] = vstart+1;
             geoGroup.lineidx += 2;
             
+            var centroid = new $3Dmol.Vector3();
+            components.push({
+                centroid : centroid.addVectors(start,end).multiplyScalar(0.5)
+            });
+            var geoGroup = geo.updateGeoGroup(0);
+            updateBoundingFromPoints(this.boundingSphere, components,
+                    geoGroup.vertexArray, geoGroup.vertices);            
         }
         /**
          * Creates an arrow shape
          * @function $3Dmol.GLShape#addArrow        
          * @param {ArrowSpec} arrowSpec
          * @return {$3Dmol.GLShape}
+         @example
+          $3Dmol.download("pdb:4DM7",viewer,{},function(){
+                  viewer.setBackgroundColor(0xffffffff);
+                  viewer.addArrow({
+                      start: {x:-10.0, y:0.0, z:0.0},
+                      end: {x:0.0, y:-10.0, z:0.0},
+                      radius: 1.0,
+                      radiusRadio:1.0,
+                      mid:1.0,
+                      clickable:true,
+                      callback:function(){
+                          this.color.setHex(0xFF0000FF);
+                          viewer.render( );
+                      }
+                  });
+                  viewer.render();
+                });
          */
         this.addArrow = function(arrowSpec) {
 
@@ -824,17 +1142,41 @@ $3Dmol.GLShape = (function() {
             });
             var geoGroup = geo.updateGeoGroup(0);
             updateBoundingFromPoints(this.boundingSphere, components,
-                    geoGroup.vertexArray);
+                    geoGroup.vertexArray, geoGroup.vertices);
 
         };
+
         
         /**
          * Create isosurface from voluemetric data.
          * @function $3Dmol.GLShape#addIsosurface         
          * @param {$3Dmol.VolumeData} data - volumetric input data
          * @param {IsoSurfaceSpec} isoSpec - volumetric data shape specification
+         * @example //the user can specify a selected region for the isosurface 
+         $.get('../test_structs/benzene-homo.cube', function(data){
+                  var voldata = new $3Dmol.VolumeData(data, "cube");
+                  viewer.addIsosurface(voldata, {isoval: 0.01,
+                                                 color: "blue",
+                                                 alpha: 0.5,
+                                                 smoothness: 10});
+                  viewer.addIsosurface(voldata, {isoval: -0.01,
+                                                 color: "red",
+                                                 smoothness: 5,
+                                                 opacity:0.5,
+                                                 wireframe:true,
+                                                 clickable:true,
+                                                 callback:
+                                                 function() {
+                                                     this.opacity = 0.0;
+                                                     viewer.render( );
+                                                 }});
+                  viewer.setStyle({}, {stick:{}});
+                  viewer.zoomTo();
+                  viewer.render();
+                });
          */
-        this.addIsosurface = function(data, volSpec) {
+        this.addIsosurface = function(data, volSpec, callback) {//may want to cache the arrays geneerated when selectedRegion ==true
+           
             var isoval = (volSpec.isoval !== undefined && typeof (volSpec.isoval) === "number") ? volSpec.isoval
                     : 0.0;
             var voxel = (volSpec.voxel) ? true : false;
@@ -845,22 +1187,22 @@ $3Dmol.GLShape = (function() {
             var nZ = data.size.z;
             var vertnums = new Int16Array(nX * nY * nZ);
             var vals = data.data;
+
             var i, il;
 
             for (i = 0, il = vertnums.length; i < il; ++i)
                 vertnums[i] = -1;
 
-            //mark locations partitioned by isoval
             var bitdata = new Uint8Array(nX * nY * nZ);
-
+           
+            //mark locations partitioned by isoval
             for (i = 0, il = vals.length; i < il; ++i) {
                 var val = (isoval >= 0) ? vals[i] - isoval : isoval - vals[i];
-
                 if (val > 0)
                     bitdata[i] |= ISDONE;
 
             }
-
+               
             var verts = [], faces = [];
 
             $3Dmol.MarchingCube.march(bitdata, verts, faces, {
@@ -873,17 +1215,100 @@ $3Dmol.GLShape = (function() {
                 nY : nY,
                 nZ : nZ
             });
-
+            
             if (!voxel && smoothness > 0)
                 $3Dmol.MarchingCube.laplacianSmooth(smoothness, verts, faces);
+            var vertexmapping= [];
+            var newvertices= [];
+            var newfaces=[];
 
+            if (volSpec.selectedRegion && volSpec.coords === undefined) {
+                volSpec.coords = volSpec.selectedRegion; //backwards compat for incorrectly documented feature
+            }
+            if (volSpec.coords !== undefined) {
+
+                var xmax = volSpec.coords[0].x, 
+                    ymax = volSpec.coords[0].y, 
+                    zmax = volSpec.coords[0].z, 
+                    xmin = volSpec.coords[0].x, 
+                    ymin = volSpec.coords[0].y, 
+                    zmin = volSpec.coords[0].z;
+
+                for (var i = 0; i < volSpec.coords.length; i++) {
+                    if (volSpec.coords[i].x > xmax)
+                        xmax = volSpec.coords[i].x;
+                    else if (volSpec.coords[i].x < xmin)
+                        xmin = volSpec.coords[i].x;
+                    if (volSpec.coords[i].y > ymax)
+                        ymax = volSpec.coords[i].y;
+                    else if (volSpec.coords[i].y < ymin)
+                        ymin = volSpec.coords[i].y;
+                    if (volSpec.coords[i].z > zmax)
+                        zmax = volSpec.coords[i].z;
+                    else if (volSpec.coords[i].z < zmin)
+                        zmin = volSpec.coords[i].z;
+                }
+
+                var rad = 2;
+                if(volSpec.radius !== undefined) {
+                    rad = volSpec.radius; //backwards compat
+                }
+                if(volSpec.selectedOffset !== undefined) { //backwards compat
+                    rad = volSpec.selectedOffset;
+                }
+                if(volSpec.seldist !== undefined) { 
+                    rad = volSpec.seldist;
+                }
+
+                xmin -= rad;
+                xmax += rad;
+                ymin -= rad;
+                ymax += rad;
+                zmin -= rad;
+                zmax += rad;
+
+                // accounts for radius
+                for (var i = 0; i < verts.length; i++) {
+                    if (verts[i].x > xmin
+                            && verts[i].x < xmax
+                            && verts[i].y > ymin
+                            && verts[i].y < ymax
+                            && verts[i].z > zmin
+                            && verts[i].z < zmax
+                            && inSelectedRegion(verts[i],
+                                    volSpec.coords, rad)) {
+                        vertexmapping.push(newvertices.length);
+                        newvertices.push(verts[i]);
+
+                    } else {
+                        vertexmapping.push(-1);
+                    }
+
+                }
+                for (var i = 0; i + 2 < faces.length; i += 3) {
+                    if (vertexmapping[faces[i]] !== -1
+                            && vertexmapping[faces[i + 1]] !== -1
+                            && vertexmapping[faces[i + 2]] !== -1) {
+                        newfaces.push(faces[i]
+                                - (faces[i] - vertexmapping[faces[i]]));
+                        newfaces.push(faces[i + 1]
+                                - (faces[i + 1] - vertexmapping[faces[i + 1]]));
+                        newfaces.push(faces[i + 2]
+                                - (faces[i + 2] - vertexmapping[faces[i + 2]]));
+                    }
+                }
+                verts = newvertices;
+                faces = newfaces;
+            }
+           
             drawCustom(this, geo, {
                 vertexArr : verts,
                 faceArr : faces,
                 normalArr : [],
-                clickable : volSpec.clickable
+                clickable : volSpec.clickable,
+                hoverable : volSpec.hoverable
             });
-           
+            
             this.updateStyle(volSpec);
             
             //computing bounding sphere from vertices
@@ -903,9 +1328,38 @@ $3Dmol.GLShape = (function() {
             var len2 = total.distanceTo(maxv);
             this.boundingSphere.center = total;
             this.boundingSphere.radius = Math.max(len1,len2);
-           
-        };
-        
+            if(typeof callback =="function")
+                callback();
+          }
+        var inSelectedRegion=function(coordinate,selectedRegion,radius){
+            
+            for(var i=0;i<selectedRegion.length;i++){
+                if(distance_from(selectedRegion[i],coordinate)<=radius)
+                    return true;
+            }
+            return false;
+        }
+        var distance_from= function(c1,c2){
+            return Math.sqrt(Math.pow((c1.x-c2.x),2)+Math.pow((c1.y-c2.y),2)+Math.pow((c1.z-c2.z),2));
+        }
+        /**
+         * @deprecated unnecesary
+
+        */
+        var convert=function(i,j,k,data){
+            var pt;
+            if(data.matrix) {
+                pt = new $3Dmol.Vector3(i,j,k);
+                pt = pt.applyMatrix4(data.matrix);
+                pt = {x: pt.x, y: pt.y, z: pt.z}; //remove vector gunk
+
+            } else {
+                pt.x = data.origin.x+data.unit.x*i;
+                pt.y = data.origin.y+data.unit.y*j;
+                pt.z = data.origin.z+data.unit.z*k;
+            }
+            return pt;
+        }
         /** 
          * @deprecated Use addIsosurface instead
          * Creates custom shape from volumetric data 
@@ -919,6 +1373,12 @@ $3Dmol.GLShape = (function() {
             this.addIsosurface(data, volSpec);
         };
 
+        //for internal use, truncate buffers to save memory
+        this.finalize = function() {
+            finalizeGeo(geo);
+            geo.initTypedArrays();
+        }
+        
         /**
          * Initialize webgl objects for rendering
          * @param {$3Dmol.Object3D} group
@@ -935,6 +1395,10 @@ $3Dmol.GLShape = (function() {
                 return;
             finalizeGeo(geo);
             geo.initTypedArrays();
+            
+            if(this.wireframe) {
+                geo.setUpWireframe();
+            }
 
             if(typeof(this.color) != 'undefined')
                 updateColor(geo, this.color);
@@ -1072,3 +1536,4 @@ $3Dmol.splitMesh = function(mesh) {
         }
         return slices;
     }
+

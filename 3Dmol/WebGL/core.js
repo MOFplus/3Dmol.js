@@ -317,6 +317,24 @@ $3Dmol.Geometry = (function() {
         
     };
     
+    geometryGroup.prototype.setColors = function(setcolor) {
+        //apply a function that takes the vertex coordinate and returns a color
+        var v = this.vertexArray;
+        var c = this.colorArray;
+        if(v.length != c.length) {
+            console.log("Cannot re-color geometry group due to mismatched lengths.");
+            return;
+        }
+        for(var i = 0; i < v.length; i+= 3) {
+            var col = setcolor(v[i],v[i+1],v[i+2]);
+            if(!(col instanceof $3Dmol.Color)) {
+                col = $3Dmol.CC.color(col);
+            }
+            c[i] = col.r;
+            c[i+1] = col.g;
+            c[i+2] = col.b;
+        }
+    };
     geometryGroup.prototype.getNumVertices = function() {
         return this.vertices;
     };
@@ -396,13 +414,16 @@ $3Dmol.Geometry = (function() {
         if (! this.faceidx)
             return;
                     
+        if(this.lineArray && this.lineArray.length == this.faceidx*2 && this.lineidx == this.faceidx*2) 
+            return; //assume already computed
+        
         var faceArr = this.faceArray, lineArr = this.lineArray = new Uint16Array(this.faceidx*2);      
         this.lineidx = this.faceidx*2;         
-        var faceoffset;
             
         for (var i = 0; i < this.faceidx / 3; ++i) {
             
-            faceoffset = i*3; lineoffset = faceoffset*2;          
+            var faceoffset = i*3;
+            var lineoffset = faceoffset*2;
             var a = faceArr[faceoffset], b = faceArr[faceoffset+1], c = faceArr[faceoffset+2];
             
             lineArr[lineoffset] = a; lineArr[lineoffset+1] = b;
@@ -434,13 +455,13 @@ $3Dmol.Geometry = (function() {
             if(this.lineidx > 0) //not always set so reclaim memory
                 this.lineArray = lineArr.subarray(0,this.lineidx); 
             else
-                this.lineArray = new Uint16Array();
+                this.lineArray = new Uint16Array(0);
                         
         }        
         else {
-            this.normalArray = new Float32Array(); 
-            this.faceArray = new Uint16Array(); 
-            this.lineArray = new Uint16Array(); 
+            this.normalArray = new Float32Array(0);
+            this.faceArray = new Uint16Array(0);
+            this.lineArray = new Uint16Array(0);
         }
         if (radiusArr) {
             this.radiusArray = radiusArr.subarray(0, this.vertices);
@@ -550,6 +571,16 @@ $3Dmol.Geometry = (function() {
                       
         },
         
+        setColors : function(setcolor) {
+            var len = this.geometryGroups.length;
+            for (var g = 0; g < len; g++) {
+                
+                var geoGroup = this.geometryGroups[g];                            
+                geoGroup.setColors(setcolor);
+                
+            }  
+        },
+        
         setUpWireframe : function() {
             for (var g = 0; g < this.groups; g++) {
                 var geoGroup = this.geometryGroups[g];
@@ -648,7 +679,7 @@ $3Dmol.Raycaster = (function() {
         
         matrixPosition.getPositionFromMatrix(group.matrixWorld);
         
-        if ((clickable.clickable !== true) || (clickable.intersectionShape === undefined))
+        if (clickable.intersectionShape === undefined)
             return intersects;       
         var intersectionShape = clickable.intersectionShape;
         var precision = raycaster.linePrecision;
@@ -662,7 +693,9 @@ $3Dmol.Raycaster = (function() {
             if (!raycaster.ray.isIntersectionSphere(sphere)) {             
 				return intersects;
             }
-        }      
+        }     
+
+
         //Iterate through intersection objects
         var i, il,
             norm, normProj, cylProj, rayProj,
@@ -798,7 +831,7 @@ $3Dmol.Raycaster = (function() {
             
             w_0.subVectors(v1, raycaster.ray.origin);
             
-            lineProj = w_0.dot(v3);
+            var lineProj = w_0.dot(v3);
             rayProj = w_0.dot(raycaster.ray.direction);
             
             normProj = clamp(raycaster.ray.direction.dot(v3));
@@ -869,6 +902,27 @@ $3Dmol.Raycaster = (function() {
         this.ray.set(origin, direction);
           
     };
+    
+    Raycaster.prototype.setFromCamera =  function ( ) { 
+        var _viewProjectionMatrix = new $3Dmol.Matrix4();
+        return function(coords, camera ) {    
+
+            if ( !camera.ortho ) {            
+                this.ray.origin.setFromMatrixPosition( camera.matrixWorld );
+                this.ray.direction.set( coords.x, coords.y, coords.z);
+
+                camera.projectionMatrixInverse.getInverse(camera.projectionMatrix);
+                _viewProjectionMatrix.multiplyMatrices(camera.matrixWorld, camera.projectionMatrixInverse);
+                this.ray.direction.applyProjection( _viewProjectionMatrix );                                
+                this.ray.direction.sub( this.ray.origin ).normalize();
+    
+            } else {
+                this.ray.origin.set( coords.x, coords.y, ( camera.near + camera.far ) / ( camera.near - camera.far ) ).unproject( camera ); 
+                this.ray.direction.set( 0, 0, - 1 ).transformDirection( camera.matrixWorld );
+    
+            } 
+        }
+    }();
     
     Raycaster.prototype.intersectObjects = function(group, objects) {     
         var intersects = [];

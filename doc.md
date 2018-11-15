@@ -79,11 +79,11 @@ There is also an unminified version provided that is missing jQuery for use when
 
 The files hosted by 3Dmol.csb.pitt.edu closely track the development version and so
 will change frequently.  If you desire more stability you may copy the files into your
-own project or, alternatively, we host release snapshots on the <a href="http://www.jsdelivr.com">jsDeliver</a>
-content delivery network (CDN).
+own project or, alternatively, we host release snapshots on the <a href="https://cdnjs.com/libraries/3Dmol">CloudFare</a>
+content delivery network (note that you must specify the release version).
 ```
-{@lang xml}<script src="http://cdn.jsdelivr.net/3dmol.js/latest/3Dmol-min.js"></script>
-<script src="http://cdn.jsdelivr.net/3dmol.js/latest/3Dmol-nojquery-min.js"></script>
+{@lang xml}<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/1.3.0/3Dmol-min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/1.3.0/3Dmol-nojquery.js"></script>
 ```
 
 Using the CDN will likely provide the best network performance to your users, but features will
@@ -91,10 +91,10 @@ lag behind the development branch as we only plan to tag new releases a few time
 
 
 <br>
-The full source distribution is available [from github](https://github.com/dkoes/3Dmol.js).
+The full source distribution is available [from github](https://github.com/3dmol/3Dmol.js).
 
 ```
-git clone https://github.com/dkoes/3Dmol.js.git
+git clone https://github.com/3dmol/3Dmol.js.git
 ``` 
 The checked out code can be built using [grunt](http://gruntjs.com/).
 ```
@@ -119,6 +119,14 @@ Models are manipulated and styled using {@link AtomSpec} JavaScript objects.
 An example of a viewer that manipulates the styles of the embedded objects is shown below.  View the source code for the implementation details.
 
 <iframe width=800, height=800 src="../tests/example.html"></iframe> 
+
+### Citing 3Dmol.js
+
+If this software is useful in your work, please use the following citation:
+
+> Nicholas Rego and David Koes   
+> 3Dmol.js: molecular visualization with WebGL   
+> Bioinformatics (2015) 31 (8): 1322-1324 [doi:10.1093/bioinformatics/btu829](http://doi.org/10.1093/bioinformatics/btu829)
 
 ##FAQ
 
@@ -146,8 +154,8 @@ Yes, as long as they support WebGL.  For example, it runs great in Safari on an 
 
 ##Contact
 
-Please address any questions or concerns to [dkoes@pitt.edu](mailto:dkoes+3dmol@pitt.edu).  
-You may also [submit an issue](https://github.com/dkoes/3Dmol.js/issues) on github.
+Please address any questions or concerns to [dkoes@pitt.edu](mailto:dkoes@pitt.edu).  
+You may also [submit an issue](https://github.com/3dmol/3Dmol.js/issues) on github.
 
 ##Funding
 

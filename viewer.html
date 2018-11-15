@@ -3,12 +3,12 @@
 <head>
 <title>3Dmol.js Viewer</title>
 <script src="build/3Dmol.js"></script>
-<style>
-* {
-	margin: 0;
-	padding: 0
-}
-</style>
+<script src="viewer.js"></script>
+<script src="https://code.jquery.com/jquery-3.1.0.js"></script>
+
+  <link rel="stylesheet" href="//code.jquery.com/ui/1.12.0/themes/base/jquery-ui.css">
+<link rel="stylesheet" href="viewer.css">
+  <script src="https://code.jquery.com/ui/1.12.0/jquery-ui.js"></script>
 <script>
     (function(i, s, o, g, r, a, m) {
         i['GoogleAnalyticsObject'] = r;
@@ -26,67 +26,15 @@
     ga('send', 'pageview');
 </script>
 <script>
-    /**
-     *
-     * jquery.binarytransport.js
-     *
-     * @description. jQuery ajax transport for making binary data type requests.
-     * @version 1.0 
-     * @author Henry Algus <henryalgus@gmail.com>
-     *
-     */
-
-    // use this transport for "binary" data type
-    $.ajaxTransport(
-                    "+binary",
-                    function(options, originalOptions, jqXHR) {
-                        // check for conditions and support for blob / arraybuffer response type
-                        if (window.FormData
-                                && ((options.dataType && (options.dataType == 'binary')) || (options.data && ((window.ArrayBuffer && options.data instanceof ArrayBuffer) || (window.Blob && options.data instanceof Blob))))) {
-                            return {
-                                // create new XMLHttpRequest
-                                send : function(headers, callback) {
-                                    // setup all variables
-                                    var xhr = new XMLHttpRequest(), url = options.url, type = options.type, async = options.async || true,
-                                    // blob or arraybuffer. Default is blob
-                                    dataType = options.responseType || "blob", data = options.data
-                                            || null, username = options.username
-                                            || null, password = options.password
-                                            || null;
-
-                                    xhr.addEventListener('load', function() {
-                                        var data = {};
-                                        data[options.dataType] = xhr.response;
-                                        // make callback and send data
-                                        callback(xhr.status, xhr.statusText,
-                                                data,
-                                                xhr.getAllResponseHeaders());
-                                    });
-
-                                    xhr.open(type, url, async, username,
-                                            password);
-
-                                    // setup custom headers
-                                    for ( var i in headers) {
-                                        xhr.setRequestHeader(i, headers[i]);
-                                    }
-
-                                    xhr.responseType = dataType;
-                                    xhr.send(data);
-                                },
-                                abort : function() {
-                                    jqXHR.abort();
-                                }
-                            };
-                        }
-                    });
-
     var glviewer = null;
     //http://localhost/$3Dmol/viewer.html?pdb=1ycr&style=cartoon&addstyle=line&select=chain~A&colorbyelement=whiteCarbon&style=surface,opacity~.8&select=chain~B&addstyle=stick&select=chain~B,resn~TRP&style=sphere
-
     //Process commands, in order, and run on viewer (array of strings split on '&')
-    var runcmds = function(cmds, viewer) {
-
+    var runcmds = function(cmds, viewer,renderSurface) {
+                console.log("rendering")
+        renderSurface = renderSurface == undefined ? true : renderSurface;
+        if(renderSurface)
+            viewer.removeAllSurfaces();
+        viewer.removeAllLabels();
         var currentsel = {};
 
         for (var i = 0; i < cmds.length; i++) {
@@ -96,22 +44,22 @@
 
             if (cmdname == 'select')
                 currentsel = cmdobj;
-            else if (cmdname == 'surface') {
+            else if (cmdname == 'surface' && renderSurface){
                 viewer.addSurface($3Dmol.SurfaceType.VDW, cmdobj, currentsel,
                         currentsel);
-            } else if (cmdname == 'style') {
+            } else if (cmdname == 'style'){
                 viewer.setStyle(currentsel, cmdobj);
-            } else if (cmdname == 'addstyle') {
+            } else if (cmdname == 'addstyle'){
                 viewer.addStyle(currentsel, cmdobj);
-            } else if (cmdname == 'labelres') {
+            } else if (cmdname == 'labelres'){
                 viewer.addResLabels(currentsel, cmdobj);
-            } else if (cmdname == 'colorbyelement') {
+            } else if (cmdname == 'colorbyelement'){
                 if (typeof ($3Dmol.elementColors[cmdobj.colorscheme]) != "undefined")
                     viewer.setColorByElement(currentsel,
                             $3Dmol.elementColors[cmdobj.colorscheme]);
-            } else if (cmdname == 'colorbyproperty') {
+            } else if (cmdname == 'colorbyproperty'){
                 if (typeof (cmdobj.prop) != "undefined"
-                        && typeof ($3Dmol.Gradient[cmdobj.scheme]) != "undefined") {
+                        && typeof ($3Dmol.Gradient[cmdobj.scheme]) != "undefined"){
                     viewer.setColorByProperty(currentsel, cmdobj.prop,
                             new $3Dmol.Gradient[cmdobj.scheme]());
                 }
@@ -120,13 +68,11 @@
         }
 
     };
-
-    $(document)
-            .ready(
-                    function() {
-
+    function run() {
+            $("#undefined").remove();
                         try {
                             var url = window.location.search.substr(1);
+                            url= decodeURIComponent(url)
                             var cmds = url.split("&");
                             var first = cmds.splice(0, 1)[0];
                             var pos = first.indexOf('=');
@@ -140,18 +86,32 @@
                             glviewer.setBackgroundColor(0xffffff);
 
                             if (src == 'pdb') {
+                                console.log(data)
                                 data = data.toUpperCase();
                                 if (!data.match(/^[1-9][A-Za-z0-9]{3}$/)) {
                                     alert("Wrong PDB ID");
                                     return;
                                 }
-                                data = "http://www.rcsb.org/pdb/files/" + data
+                                data = "http://files.rcsb.org/view/" + data
                                         + ".pdb";
                                 type = "pdb";
+                            } if (src == 'cif') {
+                                data = data.toUpperCase();
+                                if (!data.match(/^[1-9][A-Za-z0-9]{3}$/)) {
+                                    alert("Wrong PDB ID");
+                                    return;
+                                }
+                                data = "http://files.rcsb.org/view/" + data
+                                        + ".cif";
+                                type = "cif";
                             } else if (src == 'cid') {
                                 type = "sdf";
                                 data = "http://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/"
                                         + data + "/SDF?record_type=3d";
+                            } else if (src == 'mmtf') {
+                                data = data.toUpperCase();
+                                data = 'http://mmtf.rcsb.org/full/' + data + '.mmtf';
+                                type = 'mmtf';
                             } else { //url
                                 //try to extract extension
                                 type = data.substr(data.lastIndexOf('.') + 1);
@@ -164,17 +124,23 @@
                                 type = cmds[0].split('=')[1];
                             }
 
-                            if (/\.gz$/.test(data)) { //binary data
+                            var start = new Date();
+
+                            if (/\.gz$/.test(data) || type == 'mmtf') { //binary data
                                 $.ajax({url:data, 
                                     type: "GET",
                                     dataType: "binary",
                                     responseType: "arraybuffer",
                                     processData: false,
                                     success: function(ret, txt, response) {
-                                    glviewer.addModel(ret, type);
-                                    runcmds(cmds, glviewer);
-                                    glviewer.render();
-                                    glviewer.zoomTo();
+                                        console.log("mtf fetch " + (+new Date() - start) + "ms");
+                                        var time = new Date();
+                                        glviewer.addModel(ret, type);
+                                        runcmds(cmds, glviewer);
+                                        glviewer.zoomTo();
+                                        glviewer.render();
+                                        console.log("mtf load " + (+new Date() - time) + "ms");
+
                                 }}).fail(function() {
                                     //if couldn't get url natively, go through echo server
                                     $.ajax({ url:"echo.cgi", 
@@ -186,22 +152,26 @@
 
                                         glviewer.addModel(ret, type);
                                         runcmds(cmds, glviewer);
-                                        glviewer.render();
                                         glviewer.zoomTo();
+                                        glviewer.render();
                                     }})
                                 });
                             } else {
                                 $.get(data, function(ret, txt, response) {
+                                    console.log("alt fetch " + (+new Date() - start) + "ms");
+                                    var time = new Date();
                                     glviewer.addModel(ret, type);
                                     runcmds(cmds, glviewer);
-                                    glviewer.render();
                                     glviewer.zoomTo();
+                                    glviewer.render();
+                                    console.log("alt load " + (+new Date() - time) + "ms");
+
                                 }).fail(function() {
                                     //if couldn't get url natively, go through echo server
                                     $.post("echo.cgi", {
                                         'url' : data
                                     }, function(ret, txt, response) {
-                                        if(ret.search("We're sorry, but the requested")) {
+                                        if(src == 'pdb' && (ret.search("We're sorry, but the requested") >= 0 || ret == "")) {
                                             //really large files aren't available in pdb format
                                             type = 'cif';
                                             data = data.replace(/pdb$/,'cif');
@@ -211,14 +181,14 @@
 
                                                 glviewer.addModel(ret, type);
                                                 runcmds(cmds, glviewer);
-                                                glviewer.render();
                                                 glviewer.zoomTo();
+                                                glviewer.render();
                                             })
                                         } else {
-                                        	glviewer.addModel(ret, type);
-                                        	runcmds(cmds, glviewer);
-                                        	glviewer.render();
-                                        	glviewer.zoomTo();
+                                            glviewer.addModel(ret, type);
+                                            runcmds(cmds, glviewer);
+                                            glviewer.zoomTo();
+                                            glviewer.render();
                                         }
                                     });
                                 });
@@ -232,11 +202,74 @@
                             window.location = "http://get.webgl.org";
 
                         }
+                    }
 
-                    });
+$(document).ready(function(){
+    var url=window.location.href.substring(window.location.href.indexOf("?")+1);
+    run();
+    var start_width;
+    $("#sidenav").resizable({
+        handles: 'e',
+        minWidth: 300,
+        maxWidth: 1000,
+        start:function(event,ui){
+            start_width=$("#sidenav").width();
+        },
+        resize:function(event,ui){
+            glviewer.center();
+            glviewer.translate(($("#sidenav").width()-start_width)/2,0,0,false);
+            start_width=$("#sidenav").width();
+        }
+    });
+    $( "#selection_list" ).sortable({
+      items: ".selection:not(#spacer)",
+      update:  function (event, ui) {
+            render(true);
+        },
+    });//$("#selection_list").accordion();
+    $("#selection_list").disableSelection();
+
+    initSide(url);
+});
+
 </script>
 </head>
 <body>
-	<div id='gldiv' style="width: 100%; height: 100vh;"></div>
+<span id="menu"  onclick="toggleHide();">&#9776;</span>
+<div id="sidenav" class="ui-widget-content">
+  <div id="header">3Dmol Viewer</div>
+  <a href="javascript:void(0)" class="closebtn" onclick="toggleHide()">&#x2715;</a>
+  <ul id="list">
+    <li class="option"  style="pointer-events:auto;">
+        <h3>File/PDB/URL</h3>
+        <div class="container">
+            <label>Model Type: </label>
+            <select id="model_type">
+                <option value="pdb">PDB</option>
+                <option value="url">URL</option>
+                <option value="cid">CID</option>
+            </select>
+            <br>
+            <span><label>Query: </label><input id="model_input"></input></span>
+        </div>
+        <br>
+    </li>
+    <li id="selections" class="option" style="pointer-events:auto">
+        <h3>Selections</h3>
+        <div id="container">
+            <ul id="selection_list">
+
+            </ul>
+        </div>
+    </li>
+     
+</ul>
+<div id="fixed_bottom">
+    <button id="addStyle" onclick="addSelection('style')">Add Style</button><button id="addSurface" onclick="addSelection('surface')">Add Surface</button><button id="addLabelRes" onclick="addSelection('labelres')">Add LabelRes</button>
+    <button id="renderModel" onclick="render(true);">Render</button><button onclick="center();" id="centerModel">Center</button>
+</div>
+            
+</div>
+<div id='gldiv' style="width: 100%; height: 100vh;"></div>
 </body>
 </html>

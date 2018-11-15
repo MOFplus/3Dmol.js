@@ -5,9 +5,13 @@
 $3Dmol.Renderer = function(parameters) {
 
     parameters = parameters || {};
-
+    this.row = parameters.row;
+    this.col = parameters.col;
+    this.rows = parameters.rows;
+    this.cols = parameters.cols;
     var _canvas = parameters.canvas !== undefined ? parameters.canvas
             : document.createElement('canvas'),
+
 
     _precision = parameters.precision !== undefined ? parameters.precision
             : 'highp', _alpha = parameters.alpha !== undefined ? parameters.alpha
@@ -16,19 +20,20 @@ $3Dmol.Renderer = function(parameters) {
             : false, _stencil = parameters.stencil !== undefined ? parameters.stencil
             : true, _preserveDrawingBuffer = parameters.preserveDrawingBuffer !== undefined ? parameters.preserveDrawingBuffer
             : false, _clearColor = parameters.clearColor !== undefined ? new $3Dmol.Color(
-            parameters.clearColor)
-            : new $3Dmol.Color(0x000000), _clearAlpha = parameters.clearAlpha !== undefined ? parameters.clearAlpha
-            : 0, _outlineMaterial = parameters.outline !== undefined ? new $3Dmol.MeshOutlineMaterial(
-            parameters.outline)
-            : null;
-
-    this.domElement = _canvas;
+            parameters.clearColor) : new $3Dmol.Color(0x000000),
+             _clearAlpha = parameters.clearAlpha !== undefined ? parameters.clearAlpha : 0, 
+            _outlineMaterial = new $3Dmol.MeshOutlineMaterial(parameters.outline),
+            _outlineSphereImposterMaterial = new $3Dmol.SphereImposterOutlineMaterial(parameters.outline),
+            _outlineStickImposterMaterial = new $3Dmol.StickImposterOutlineMaterial(parameters.outline),
+            _outlineEnabled = !!parameters.outline
+            ;
+    this.domElement = _canvas;    
     this.context = null;
     this.devicePixelRatio = parameters.devicePixelRatio !== undefined ? parameters.devicePixelRatio
             : (self.devicePixelRatio !== undefined) ? self.devicePixelRatio : 1;
 
     // clearing
-
+    _canvas.id=parameters.id;
     this.autoClear = true;
     this.autoClearColor = true;
     this.autoClearDepth = true;
@@ -159,29 +164,57 @@ $3Dmol.Renderer = function(parameters) {
         _outlineMaterial = new $3Dmol.MeshOutlineMaterial(parameters);
         _outlineSphereImposterMaterial = new $3Dmol.SphereImposterOutlineMaterial(parameters);
         _outlineStickImposterMaterial = new $3Dmol.StickImposterOutlineMaterial(parameters);
+        _outlineEnabled = true;
     };
 
     this.disableOutline = function() {
-        _outlineMaterial = null;
-        _outlineSphereImposterMaterial = null;
-        _outlineStickImposterMaterial = null;
+        _outlineEnabled = false;
     };
+    this.setViewport = function(){
+        if(this.rows != undefined && this.cols != undefined && this.row != undefined && this.col != undefined){
 
+            var wid = _canvas.width/this.cols;
+            var hei = _canvas.height/this.rows;
+           
+            _viewportWidth =  wid * this.devicePixelRatio;
+            _viewportHeight = hei * this.devicePixelRatio;
+
+             _gl.drawingBufferWidth = _viewportWidth*3;
+              _gl.drawingBufferHeight = _viewportHeight;
+            _gl.enable(_gl.SCISSOR_TEST);
+            _gl.scissor(wid*this.col,hei * this.row, wid, hei);
+            _gl.viewport(wid * this.col , hei * this.row, wid, hei);
+
+        }
+    }
     this.setSize = function(width, height) {
+        if(this.rows != undefined && this.cols != undefined && this.row != undefined && this.col != undefined){
+            var wid = width/this.cols;
+            var hei = height/this.rows;
+            _canvas.width =width* this.devicePixelRatio;
+            _canvas.height = height*this.devicePixelRatio;
 
-        _viewportWidth = _canvas.width = width * this.devicePixelRatio;
-        _viewportHeight =  _canvas.height = height * this.devicePixelRatio;
+            _viewportWidth =  wid * this.devicePixelRatio;
+            _viewportHeight = hei * this.devicePixelRatio;
 
-        _canvas.style.width = width + 'px';
-        _canvas.style.height = height + 'px';
+            _canvas.style.width = width + 'px';
+            _canvas.style.height = height + 'px';
 
-        _gl.viewport(0, 0, _gl.drawingBufferWidth, _gl.drawingBufferHeight);
+            this.setViewport();
+        }else{
+            _viewportWidth = _canvas.width = width * this.devicePixelRatio;
+            _viewportHeight =  _canvas.height = height * this.devicePixelRatio;
+
+            _canvas.style.width = width + 'px';
+            _canvas.style.height = height + 'px';
+
+            _gl.viewport(0, 0, _gl.drawingBufferWidth, _gl.drawingBufferHeight);
+        }
     };
 
     this.clear = function(color, depth, stencil) {
 
         var bits = 0;
-
         if (color === undefined || color)
             bits |= _gl.COLOR_BUFFER_BIT;
         if (depth === undefined || depth)
@@ -996,7 +1029,7 @@ $3Dmol.Renderer = function(parameters) {
 
                 _this.renderBuffer(camera, lights, fog, material, buffer,
                         object);
-                if (_outlineMaterial) {                  
+                if (_outlineEnabled || material.outline) {                  
                     if(material.shaderID == 'sphereimposter') {
                         _this.renderBuffer(camera, lights, fog, _outlineSphereImposterMaterial,
                                 buffer, object);                        
@@ -1066,8 +1099,10 @@ $3Dmol.Renderer = function(parameters) {
 
         _currentWidth = _viewportWidth;
         _currentHeight = _viewportHeight;
-
+        this.setViewport();
         if (this.autoClear || forceClear) {
+            _gl.clearColor(_clearColor.r, _clearColor.g, _clearColor.b,
+                _clearAlpha);
             this.clear(this.autoClearColor, this.autoClearDepth,
                     this.autoClearStencil);
 
@@ -1120,7 +1155,6 @@ $3Dmol.Renderer = function(parameters) {
 
         this.setDepthTest(true);
         this.setDepthWrite(true);
-
         // _gl.finish();
 
     };
@@ -1520,6 +1554,26 @@ $3Dmol.Renderer = function(parameters) {
 
         }
 
+    }
+    this.getXYRatio = function(){
+       if(this.rows != undefined && this.cols != undefined && this.row != undefined && this.col != undefined){
+            return [this.cols,this.rows];
+       }else{
+            return [1,1];
+       }
+    }
+    this.getAspect = function(width,height){
+        if(width == undefined || height == undefined){
+            width = _canvas.width;
+            height = _canvas.height;
+        }
+        var aspect = width/height;
+        if(this.rows != undefined && this.cols != undefined && this.row != undefined && this.col != undefined){
+            var wid = width/this.cols;
+            var hei = height/this.rows;
+            aspect = wid/hei;
+        }
+        return aspect;
     }
 
     this.setTexture = function(texture, slot) {

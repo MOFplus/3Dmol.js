@@ -8,8 +8,22 @@
  * 
  * @constructor 
  * @param {Object} element HTML element within which to create viewer
- * @param {function} callback - Callback function to be immediately executed on this viewer
- * @param {Object} defaultcolors - Object defining default atom colors as atom => color property value pairs for all models within this viewer
+ * @param {Object} config Object containing optional configuration for the viewer including:
+ * @param {function} config.callback - Callback function to be immediately executed on this viewer
+ * @param {Object} config.defaultcolors - Object defining default atom colors as atom => color property value pairs for all models within this viewer
+ * @param {boolean} config.nomouse - Whether to disable mouse handlers
+ * @param {string} config.backgroundColor - Color of the canvas' background
+ * @param {number} config.camerax
+ * @param {number} config.hoverDuration
+ * @param {string} config.id - id of the canvas
+ * @param config.row
+ * @param config.col
+ * @param config.rows
+ * @param config.cols
+ * @param config.canvases
+ * @param config.viewers
+ * @param {boolean} config.control_all
+ * @param {boolean} config.orthographic
  */
 $3Dmol.GLViewer = (function() {
     // private class variables
@@ -22,12 +36,13 @@ $3Dmol.GLViewer = (function() {
         // set variables
         config = config || {};
         var callback = config.callback;
-        var defaultcolors = config.defaultcolors;    	
+        var defaultcolors = config.defaultcolors;       
         if(!defaultcolors)
             defaultcolors = $3Dmol.elementColors.defaultColors;
         var nomouse = config.nomouse;
         var bgColor = 0;
-
+        config.backgroundColor = config.backgroundColor || "#ffffff";
+       //config.disableFog= config.disableFog || false;
         if(typeof(config.backgroundColor) != undefined) {
             bgColor = $3Dmol.CC.color(config.backgroundColor).getHex();
         }
@@ -45,8 +60,15 @@ $3Dmol.GLViewer = (function() {
         var surfaces = {};
         var shapes = []; // Generic shapes
         var labels = [];
+        var fixed_labels = [];
         var clickables = []; //things you can click on
-        
+        var hoverables = []; //things you can hover over
+        var popups = [];
+        var current_hover = null;
+        var hoverDuration = 500;
+        if(typeof(config.hoverDuration) != undefined) {
+            hoverDuration = config.hoverDuration;
+        }
         var WIDTH = container.width();
         var HEIGHT = container.height();
 
@@ -54,19 +76,23 @@ $3Dmol.GLViewer = (function() {
         // $(container).width(WIDTH);
         // $(container).height(HEIGHT);
 
-        var ASPECT = WIDTH / HEIGHT;
+       
         var NEAR = 1, FAR = 800;
         var CAMERA_Z = 150;
         var fov = 20;
 
         var linkedViewers = [];
-
         var renderer = new $3Dmol.Renderer({
             antialias : true,
             preserveDrawingBuffer: true, //so we can export images
-            premultipliedAlpha : false/* more traditional compositing with background */
+            premultipliedAlpha : false,/* more traditional compositing with background */
+            id:config.id,
+            row:config.row,
+            col:config.col,
+            rows:config.rows,
+            cols:config.cols,
+            canvas:config.canvas
         });
-
         renderer.domElement.style.width = "100%";
         renderer.domElement.style.height = "100%";
         renderer.domElement.style.padding = "0";
@@ -75,7 +101,16 @@ $3Dmol.GLViewer = (function() {
         renderer.domElement.style.left = "0px";
         renderer.domElement.style.zIndex = "0";
 
-        var camera = new $3Dmol.Camera(fov, ASPECT, NEAR, FAR);
+        var row = config.row;
+        var col = config.col;
+        var cols = config.cols;
+        var rows = config.rows;
+        var viewers = config.viewers;
+        var control_all = config.control_all;
+
+        var ASPECT =renderer.getAspect(WIDTH,HEIGHT);
+
+        var camera = new $3Dmol.Camera(fov, ASPECT, NEAR, FAR, config.orthographic);
         camera.position = new $3Dmol.Vector3(camerax, 0, CAMERA_Z);
         var lookingAt = new $3Dmol.Vector3();
         camera.lookAt(lookingAt);
@@ -96,7 +131,7 @@ $3Dmol.GLViewer = (function() {
         // UI variables
         var cq = new $3Dmol.Quaternion(0, 0, 0, 1);
         var dq = new $3Dmol.Quaternion(0, 0, 0, 1);
-        var animated = false;
+        var animated = 0;
         var isDragging = false;
         var mouseStartX = 0;
         var mouseStartY = 0;
@@ -106,18 +141,44 @@ $3Dmol.GLViewer = (function() {
         var cslabNear = 0;
         var cslabFar = 0;      
         
+        var decAnim = function() {
+            //decrement the number of animations currently
+            animated--;
+            if(animated < 0) animated = 0;
+        }
+        var incAnim = function() {
+            animated++;
+        }
         var nextSurfID = function() {
             //compute the next highest surface id directly from surfaces
             //this is necessary to support linking of model data
             var max = 0;
-            for (i in surfaces) { // this is an object with possible holes
+            for (var i in surfaces) { // this is an object with possible holes
                 if(!surfaces.hasOwnProperty(i)) continue;
+                var val = parseInt(i);
+                if(!isNaN(val)) i = val;
                 if(i > max) max = i;
             }
             return max+1;
         };
 
+        //updates font size of labels based on camera zoom
+        var setLabelStyles = function(scaleFactor){
+            for(var label in labels){
+                var label = labels[label];
+                if(label.stylespec.scale){
+                    modelGroup.remove(label.sprite);
+                    label.dispose();
+                    //change font size here
+                    label.stylespec.fontSize*=(1+scaleFactor);
+                    label.setContext();
+                    modelGroup.add(label.sprite);
+                }
+            }
+        }
+
         var setSlabAndFog = function() {
+            
             var center = camera.position.z - rotationGroup.position.z;
             if (center < 1)
                 center = 1;
@@ -127,33 +188,37 @@ $3Dmol.GLViewer = (function() {
             camera.far = center + slabFar;
             if (camera.near + 1 > camera.far)
                 camera.far = camera.near + 1;
-            if (camera instanceof $3Dmol.Camera) {
-                camera.fov = fov;
-            } else {
-                camera.right = center * Math.tan(Math.PI / 180 * fov);
-                camera.left = -camera.right;
-                camera.top = camera.right / ASPECT;
-                camera.bottom = -camera.top;
-            }
+
+            camera.fov = fov;
+            camera.right = center * Math.tan(Math.PI / 180 * fov);
+            camera.left = -camera.right;
+            camera.top = camera.right / ASPECT;
+            camera.bottom = -camera.top;
+            
             camera.updateProjectionMatrix();
+
             scene.fog.near = camera.near + fogStart
                     * (camera.far - camera.near);
             // if (scene.fog.near > center) scene.fog.near = center;
             scene.fog.far = camera.far;
+            
+            if(config.disableFog){
+                scene.fog.near=scene.fog.far;
+            }
         };
 
         // display scene
         //if nolink is set/true, don't propagate changes to linked viewers
         var show = function(nolink) {
+            renderer.setViewport();
             if (!scene)
                 return;
-
             // var time = new Date();
             setSlabAndFog();
             renderer.render(scene, camera);
             // console.log("rendered in " + (+new Date() - time) + "ms");
             
-            if(!nolink && linkedViewers.length > 0) {
+            if(!nolink && linkedViewers.length > 0) {                
                 var view = _viewer.getView();
                 for(var i = 0; i < linkedViewers.length; i++) {
                     var other = linkedViewers[i];
@@ -184,7 +249,6 @@ $3Dmol.GLViewer = (function() {
         };
 
         initializeScene();
-
         renderer.setClearColorHex(bgColor, 1.0);
         scene.fog.color = $3Dmol.CC.color(bgColor);
 
@@ -193,45 +257,52 @@ $3Dmol.GLViewer = (function() {
         // enable mouse support
 
         //regenerate the list of clickables
+        //also updates hoverables
         var updateClickables = function() {
             clickables.splice(0,clickables.length);
+            hoverables.splice(0,hoverables.length);
             var i, il;
-
+            
             for (i = 0, il = models.length; i < il; i++) {
                 var model = models[i];
                 if(model) {
                     var atoms = model.selectedAtoms({
                         clickable : true
                     });
+                    
+                    var hoverable_atoms = model.selectedAtoms({
+                        hoverable : true
+                    });
+                    Array.prototype.push.apply(hoverables,hoverable_atoms);
+
                     Array.prototype.push.apply(clickables, atoms); //add atoms into clickables
+                    
                 }
             }
-
             for (i = 0, il = shapes.length; i < il; i++) {
 
                 var shape = shapes[i];
                 if (shape && shape.clickable) {
                     clickables.push(shape);
                 }
+                if( shape && shape.hoverable){
+                    hoverables.push(shape);
+                }
             }
         };
-        
         // Checks for selection intersects on mousedown
         var handleClickSelection = function(mouseX, mouseY, event) {
+
             if(clickables.length == 0) return;
             var mouse = {
                 x : mouseX,
                 y : mouseY,
                 z : -1.0
             };
-            mouseVector.set(mouse.x, mouse.y, mouse.z);
-            projector.unprojectVector(mouseVector, camera);
-            mouseVector.sub(camera.position).normalize();
 
-            raycaster.set(camera.position, mouseVector);
-
+            raycaster.setFromCamera(mouse,camera);
+            
             var intersects = [];
-
             intersects = raycaster.intersectObjects(modelGroup, clickables);
             if (intersects.length) {
                 var selected = intersects[0].clickable;
@@ -241,6 +312,59 @@ $3Dmol.GLViewer = (function() {
                 }
             }
         };
+        
+        //set current_hover to sel (which can be null), calling appropraite callbacks
+        var setHover = function(selected, event) {
+            if(current_hover == selected) return;
+            if(current_hover) current_hover.unhover_callback(current_hover, _viewer, event, container);
+            current_hover=selected;
+            if (selected && selected.hover_callback !== undefined
+                    && typeof (selected.hover_callback) === "function") {
+                selected.hover_callback(selected, _viewer, event, container);
+            }  
+        };
+        
+        //checks for selection intersects on hover
+        var handleHoverSelection = function(mouseX, mouseY, event){
+            if(hoverables.length == 0) return;
+            var mouse = {
+                x : mouseX,
+                y : mouseY,
+                z : -1.0
+            };
+            raycaster.setFromCamera(mouse,camera);
+
+            var intersects = [];
+            intersects = raycaster.intersectObjects(modelGroup, hoverables);
+            if (intersects.length) {
+                var selected = intersects[0].clickable;
+                setHover(selected);
+                current_hover=selected;
+            }
+            else{
+                setHover(null);
+            }
+        }
+        //sees if the mouse is still on the object that invoked a hover event and if not then the unhover callback is called
+        var handleHoverContinue = function(mouseX,mouseY,event){
+            var mouse = {
+                x : mouseX,
+                y : mouseY,
+                z : -1.0
+            };
+
+            raycaster.setFromCamera(mouse,camera);
+
+            var intersects = [];
+            intersects = raycaster.intersectObjects(modelGroup, hoverables);
+            if(intersects.length == 0 || intersects[0] === undefined){
+                setHover(null);
+            }
+            if(intersects[0]!== undefined && intersects[0].clickable !== current_hover){
+                setHover(null);
+            }
+        }
+
 
         var calcTouchDistance = function(ev) { // distance between first two
                                                 // fingers
@@ -254,6 +378,8 @@ $3Dmol.GLViewer = (function() {
         //check targetTouches as well
         var getXY = function(ev) {
             var x = ev.pageX, y = ev.pageY;
+            if(x == undefined) x = ev.originalEvent.pageX; //firefox
+            if(y == undefined) y = ev.originalEvent.pageY;
             if (ev.originalEvent.targetTouches
                     && ev.originalEvent.targetTouches[0]) {
                 x = ev.originalEvent.targetTouches[0].pageX;
@@ -282,6 +408,26 @@ $3Dmol.GLViewer = (function() {
             t.applyQuaternion(q);
             return t;
         }
+        
+        //for grid viewers, return true if point is in this viewer
+        var isInViewer = function(x,y) {
+            var WIDTH = container.width();
+            var HEIGHT = container.height(); 
+            if(viewers != undefined && !control_all){
+                var width = WIDTH/cols;
+                var height = HEIGHT/rows;
+                var offset = $('canvas',container).offset();
+                var relx = (x - offset.left)
+                var rely = (y - offset.top) 
+                    
+                var r = rows-Math.floor(rely/height)-1;
+                var c= Math.floor(relx/width);
+
+                if(r != row || c != col)
+                    return false;
+            }
+            return true;
+        }
 
         // this event is bound to the body element, not the container,
         // so no need to put it inside initContainer()
@@ -295,7 +441,6 @@ $3Dmol.GLViewer = (function() {
                     var offset = $('canvas',container).offset();
                     var mouseX = ((x - offset.left) / WIDTH) * 2 - 1;
                     var mouseY = -((y - offset.top) / HEIGHT) * 2 + 1;
-
                     handleClickSelection(mouseX, mouseY, ev, container);
                 }
             }
@@ -303,7 +448,53 @@ $3Dmol.GLViewer = (function() {
             isDragging = false;
 
         });
+
         
+        //if the user has specify zoom limits, readjust to fit within them
+        //also, make sure we don't go past CAMERA_Z
+        var adjustZoomToLimits = function(z) {
+            //a lower limit of 0 is at CAMERA_Z
+            if(config.lowerZoomLimit && config.lowerZoomLimit > 0) {
+                var lower = CAMERA_Z-config.lowerZoomLimit;
+                if(z > lower) z = lower;
+            }
+            
+            if(config.upperZoomLimit && config.upperZoomLimit > 0) {
+                var upper = CAMERA_Z-config.upperZoomLimit;
+                if(z < upper) z = upper;
+            }
+            
+            if(z > CAMERA_Z) {
+                z = CAMERA_Z*0.999; //avoid getting stuck
+            }
+            return z;
+        };
+        
+        
+        /**
+         * Set lower and upper limit stops for zoom.
+         * 
+         * @function $3Dmol.GLViewer#setZoomLimits
+         * @param {lower} - limit on zoom in (positive number).  Default 0.
+         * @param {upper} - limit on zoom out (positive number).  Default infinite.
+         * @example
+          $.get("data/set1_122_complex.mol2", function(moldata) {
+                var m = viewer.addModel(moldata);
+                viewer.setStyle({stick:{colorscheme:"Jmol"}});
+                viewer.setZoomLimits(100,200);
+                viewer.zoomTo();
+                viewer.zoom(10); //will not zoom all the way
+                viewer.render();
+            });
+     */
+        this.setZoomLimits = function(lower, upper) {
+            if(typeof(lower) !== 'undefined') config.lowerZoomLimit = lower;
+            if(upper) config.upperZoomLimit = upper;
+            rotationGroup.position.z = adjustZoomToLimits(rotationGroup.position.z);
+            show();
+        };
+
+        var mouseButton;
         var _handleMouseDown = this._handleMouseDown = function(ev) {
             ev.preventDefault();
             if (!scene)
@@ -311,7 +502,6 @@ $3Dmol.GLViewer = (function() {
             var xy = getXY(ev);
             var x = xy[0];
             var y = xy[1];
-            
             if (x === undefined)
                 return;
             isDragging = true;
@@ -329,29 +519,84 @@ $3Dmol.GLViewer = (function() {
             currentModelPos = modelGroup.position.clone();
             cslabNear = slabNear;
             cslabFar = slabFar;
-
         };
         
         var _handleMouseScroll  = this._handleMouseScroll = function(ev) { // Zoom
             ev.preventDefault();
             if (!scene)
                 return;
+
+            var xy = getXY(ev);
+            var x = xy[0];
+            var y = xy[1];
+            if (x === undefined)
+                return;
+            if(!isInViewer(x,y)) {
+                return;
+            }
+
             var scaleFactor = (CAMERA_Z - rotationGroup.position.z) * 0.85;
-            if (ev.originalEvent.detail) { // Webkit
-                rotationGroup.position.z += scaleFactor
+            var mult = 1.0;
+            if(ev.originalEvent.ctrlKey) {
+                mult = -1.0; //this is a pinch event turned into a wheel event (or they're just holding down the ctrl)
+            }
+            if (ev.originalEvent.detail) { 
+                rotationGroup.position.z += mult * scaleFactor
                         * ev.originalEvent.detail / 10;
-            } else if (ev.originalEvent.wheelDelta) { // Firefox
-                rotationGroup.position.z -= scaleFactor
+            } else if (ev.originalEvent.wheelDelta) { 
+                rotationGroup.position.z -= mult * scaleFactor
                         * ev.originalEvent.wheelDelta / 400;
             }
-            if(rotationGroup.position.z > CAMERA_Z) rotationGroup.position.z = CAMERA_Z*0.999; //avoid getting stuck
-
+            rotationGroup.position.z = adjustZoomToLimits(rotationGroup.position.z);            
             show();
-        };
+        };        
+        /**
+         * Return image URI of viewer contents (base64 encoded).
+         * @function $3Dmol.GLViewer#pngURI
+         * 
+         */
+        this.pngURI = function() {
+            return this.getCanvas().toDataURL('image/png');
+        }
         
+        /**
+         * Return underlying canvas element.         
+         */
+        this.getCanvas = function() {
+            return glDOM.get(0);
+        }
+    /**
+         * Set the duration of the hover delay
+         * 
+         * @function $3Dmol.GLViewer#setHoverDuration
+         * @param {number}
+         *            [hoverDuration] - an optional parameter that denotes
+         *            the duration of the hover delay (in milliseconds) before the hover action is called
+         * 
+     */
+        this.setHoverDuration = function(duration) {
+            hoverDuration = duration;
+        }
+        var hoverTimeout;
         var _handleMouseMove = this._handleMouseMove = function(ev) { // touchmove
+
             WIDTH = container.width();
             HEIGHT = container.height();
+
+            clearTimeout(hoverTimeout);
+            var offset = $('canvas',container).offset();
+            var mouseX = ((getXY(ev)[0] - offset.left) / WIDTH) * 2 - 1;
+            var mouseY = -((getXY(ev)[1] - offset.top) / HEIGHT) * 2 + 1;
+            
+            //hover timeout
+            if(current_hover !== null)
+                handleHoverContinue(mouseX,mouseY,ev);
+                hoverTimeout=setTimeout(
+                    function(){
+                        handleHoverSelection(mouseX,mouseY,ev);
+                    }
+                ,hoverDuration);
+
             ev.preventDefault();
             if (!scene)
                 return;
@@ -364,6 +609,12 @@ $3Dmol.GLViewer = (function() {
             var y = xy[1];
             if (x === undefined)
                 return;
+
+            if(!isInViewer(x,y)) {
+                return;
+            }
+
+
             var dx = (x - mouseStartX) / WIDTH;
             var dy = (y - mouseStartY) / HEIGHT;
             // check for pinch
@@ -375,28 +626,33 @@ $3Dmol.GLViewer = (function() {
                 mode = 2;
                 dy = (newdist - touchDistanceStart) * 2
                         / (WIDTH + HEIGHT);
+                console.log("pinch "+touchDistanceStart+" dy "+dy);
             } else if (ev.originalEvent.targetTouches
                     && ev.originalEvent.targetTouches.length == 3) {
                 // translate
                 mode = 1;
             }
-
+            var xyRatio = renderer.getXYRatio();
+            var ratioX = xyRatio[0];
+            var ratioY = xyRatio[1];
+            dx*=ratioX;
+            dy*=ratioY;
             var r = Math.sqrt(dx * dx + dy * dy);
             var scaleFactor;
             if (mode == 3
                     || (mouseButton == 3 && ev.ctrlKey)) { // Slab
                 slabNear = cslabNear + dx * 100;
-                slabFar = cslabFar + dy * 100;
+                slabFar = cslabFar - dy * 100;
             } else if (mode == 2 || mouseButton == 3
                     || ev.shiftKey) { // Zoom
                 scaleFactor = (CAMERA_Z - rotationGroup.position.z) * 0.85;
                 if (scaleFactor < 80)
                     scaleFactor = 80;
                 rotationGroup.position.z = cz + dy * scaleFactor;
-                if(rotationGroup.position.z > CAMERA_Z) rotationGroup.position.z = CAMERA_Z*0.999; //avoid getting stuck
+                rotationGroup.position.z = adjustZoomToLimits(rotationGroup.position.z); 
             } else if (mode == 1 || mouseButton == 2
                     || ev.ctrlKey) { // Translate
-                var t = screenXY2model(x-mouseStartX, y-mouseStartY);
+                var t = screenXY2model(ratioX*(x-mouseStartX), ratioY*(y-mouseStartY));
                 modelGroup.position.addVectors(currentModelPos,t);
                 
             } else if ((mode === 0 || mouseButton == 1)
@@ -418,7 +674,7 @@ $3Dmol.GLViewer = (function() {
             container = element;
             WIDTH = container.width();
             HEIGHT = container.height();
-            ASPECT = WIDTH / HEIGHT;
+            ASPECT = renderer.getAspect(WIDTH,HEIGHT);
             renderer.setSize(WIDTH, HEIGHT);
             container.append(renderer.domElement);
             glDOM = $(renderer.domElement);
@@ -432,6 +688,7 @@ $3Dmol.GLViewer = (function() {
                 glDOM.bind("contextmenu", function(ev) {
                     ev.preventDefault();
                 });
+                
             }
         };
         initContainer(container);
@@ -441,29 +698,11 @@ $3Dmol.GLViewer = (function() {
          * Change the viewer's container element 
          * Also useful if the original container element was removed from the DOM.
          * 
-         * @function $3Dmol.GLViewer#resetContainer
+         * @function $3Dmol.GLViewer#setContainer
          *
          * @param {Object | string} element
          *            Either HTML element or string identifier. Defaults to the element used to initialize the viewer.
 
-         * @example
-         * // Assume there exist HTML divs with ids "gldiv", "gldiv2"
-         * var element = $("#gldiv"), element2 = $("#gldiv2");
-         * // Create GLViewer within 'gldiv'
-         * var myviewer = $3Dmol.createViewer(element);
-         * // Move the canvas to the other div
-         * myviewer.setContainer(element2)
-         *
-         * @example
-         * // Assume there exists an HTML div with id "gldiv"
-         * var element = $("#gldiv");
-         * // Create GLViewer within 'gldiv'
-         * var myviewer = $3Dmol.createViewer(element);
-         * // Remove the element from the DOM, and add a new element
-         * element.remove()
-         * $('body').prepend("<div id='newdiv'></div>")
-         * // Show the canvas in the new element
-         * myviewer.setContainer('newdiv')
          */
         this.setContainer = function(element) {
             if($.type(element) === "string")
@@ -486,8 +725,9 @@ $3Dmol.GLViewer = (function() {
          * 
          * @example
          * 
-         * //Set 'myviewer' background color to white
-         * myviewer.setBackgroundColor(0xffffff)
+         * viewer.setBackgroundColor(0x000000);
+
+
          * 
          */
         this.setBackgroundColor = function(hex, a) {
@@ -502,15 +742,50 @@ $3Dmol.GLViewer = (function() {
             bgColor = c.getHex();
             renderer.setClearColorHex(c.getHex(), a);
             show();
+            
             return this;
         };
         
         /**
-         * Enable outline 
-         * @function $eDmol.GLViewer#outline
+         * Set view projection scheme.  Either orthographic or perspective.  
+         * Default is perspective.  Orthographic can also be enabled on viewer creation
+         * by setting orthographic to true in the config object.
+         * 
+         * @function $3Dmol.GLViewer#setProjection
          * 
          * @example
-         * myviewer.outline()
+         viewer.setViewStyle({style:"outline"});
+              $.get('data/1fas.pqr', function(data){
+                  viewer.addModel(data, "pqr");
+                  $.get("data/1fas.cube",function(volumedata){
+                      viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity:0.85,voldata: new $3Dmol.VolumeData(volumedata, "cube"), volscheme: new $3Dmol.Gradient.RWB(-10,10)},{});
+                  });
+                  viewer.zoomTo();
+
+                  viewer.setProjection("orthographic");
+                  viewer.render(callback);
+              });
+         * 
+         */
+        this.setProjection = function(proj) {
+            camera.ortho = (proj === "orthographic");
+            setSlabAndFog();            
+        };
+        
+        /**
+         * Set global view styles.  
+         * @function $3Dmol.GLViewer#setViewStyle
+         * 
+         * @example
+         *   viewer.setViewStyle({style:"outline"});
+              $.get('data/1fas.pqr', function(data){
+                  viewer.addModel(data, "pqr");
+                  $.get("data/1fas.cube",function(volumedata){
+                      viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity:0.85,voldata: new $3Dmol.VolumeData(volumedata, "cube"), volscheme: new $3Dmol.Gradient.RWB(-10,10)},{});
+                  });
+                  viewer.zoomTo();
+                  viewer.render(callback);
+              });
          * 
          */
          this.setViewStyle = function(parameters) {
@@ -521,12 +796,12 @@ $3Dmol.GLViewer = (function() {
                 renderer.enableOutline(params);
             } else {
                 renderer.disableOutline();
-            }
+            }           
             return this;
         }
          
         if(config.style) { //enable setting style in constructor
-             this.setViewStyle(config.style);
+             this.setViewStyle(config);
         }
 
         /**
@@ -563,7 +838,7 @@ $3Dmol.GLViewer = (function() {
         this.resize = function() {
             WIDTH = container.width();
             HEIGHT = container.height();
-            ASPECT = WIDTH / HEIGHT;
+            ASPECT = renderer.getAspect(WIDTH,HEIGHT);
             renderer.setSize(WIDTH, HEIGHT);
             camera.aspect = ASPECT;
             camera.updateProjectionMatrix();
@@ -579,16 +854,30 @@ $3Dmol.GLViewer = (function() {
          * @function $3Dmol.GLViewer#getModel
          * @param {number}
          *            [id=last model id] - Retrieve model with specified id
-         * @default Returns last model added to viewer
+         * @default Returns last model added to viewer or null if there are no models
          * @return {GLModel}
          * 
          * @example // Retrieve reference to first GLModel added var m =
-         *          glviewer.getModel(0);
+         *    $3Dmol.download("pdb:1UBQ",viewer,{},function(m1){
+                  $3Dmol.download("pdb:1UBI", viewer,{}, function(m2) {
+                    viewer.zoomTo();
+                    m1.setStyle({cartoon: {color:'green'}});
+                    //could use m2 here as well
+                    viewer.getModel().setStyle({cartoon: {color:'blue'}});
+                    viewer.render();
+                })
+              });     
          */
         this.getModel = function(id) {
-            id = id || models.length - 1;
+            if(!(id in models)) {
+                if(models.length == 0) 
+                    return null;
+                else
+                    return models[models.length-1]; //get last model if no (or invalid) id specified
+            }
             return models[id];
         };
+
 
         /**
          * Rotate scene by angle degrees around axis
@@ -597,35 +886,83 @@ $3Dmol.GLViewer = (function() {
          * @param {number}
          *            [angle] - Angle, in degrees, to rotate by.
          * @param {string}
-         *            [angle] - Axis ("x", "y", or "z") to rotate around.
+         *            [axis] - Axis ("x", "y", or "z") to rotate around.
          *            Default "y"
-         * 
+         * @param {number}
+         *            [animationDuration] - an optional parameter that denotes
+         *            the duration of the rotation animation. Default 0 (no animation)
+         * @param {boolean} [fixedPath] - if true animation is constrained to 
+         *      requested motion, overriding updates that happen during the animation         *            
+         * @example     $3Dmol.download('cid:4000', viewer, {}, function() {
+      viewer.setStyle({stick:{}});
+      viewer.zoomTo();
+      viewer.rotate(90,'y',1);
+      viewer.render(callback);
+    });
+
+         *  
          */
-        this.rotate = function(angle, axis) {
+        this.rotate = function(angle, axis, animationDuration, fixedPath) {
+            animationDuration = animationDuration!==undefined ? animationDuration : 0;
+
             if (typeof (axis) === "undefined") {
                 axis = "y";
             }
-            var i = 0, j = 0, k = 0;
-            var rangle = Math.PI * angle / 180.0;
-            var s = Math.sin(rangle / 2.0);
-            var c = Math.cos(rangle / 2.0);
-            if (axis == "x")
-                i = s;
-            if (axis == "y")
-                j = s;
-            if (axis == "z")
-                k = s;
 
-            var q = new $3Dmol.Quaternion(i, j, k, c).normalize();
-            rotationGroup.quaternion.multiply(q);
-            show();
+            if(axis == "x"){
+                axis = {x:1,y:0,z:0}
+            }if(axis =="y"){
+                axis = {x:0,y:1,z:0}
+            }if(axis =="z"){
+                axis = {x:0,y:0,z:1}
+            }
+            var qFromAngle = function(rangle) {
+                var s = Math.sin(rangle / 2.0);
+                var c = Math.cos(rangle / 2.0);
+                var i = 0, j = 0, k = 0;
+
+                i = axis.x * s 
+                j = axis.y * s 
+                k = axis.z * s
+
+                return new $3Dmol.Quaternion(i, j, k, c).normalize();
+            }
+            
+
+            var wait_time = 20;
+            var rangle = Math.PI * angle / 180.0;
+            var q = qFromAngle(rangle);
+            
+            if(animationDuration ){
+                var final = new $3Dmol.Quaternion().copy(rotationGroup.quaternion).multiply(q);//final
+                animateMotion(animationDuration,fixedPath,
+                        modelGroup.position,
+                        rotationGroup.position.z, 
+                        final,
+                        lookingAt);              
+            } else { //not animated
+                rotationGroup.quaternion.multiply(q);
+                show();
+            }
             return this;
+
+        };
+
+        this.surfacesFinished= function() {
+              for(var key in surfaces){
+                if(!surfaces[key][0].done){
+                    return false;
+                }
+            }
+            return true;
+
+
         };
 
         /** Returns an array representing the current viewpoint.
          * Translation, zoom, and rotation quaternion. 
          * @function $3Dmol.GLViewer#getView
-         * @returns {Array.<number>} arg
+         * @returns {Array.<number>} [ pos.x, pos.y, pos.z, rotationGroup.position.z, q.x, q.y, q.z, q.w ]
          *  */
         this.getView = function() {
             if (!modelGroup)
@@ -671,10 +1008,10 @@ $3Dmol.GLViewer = (function() {
          * 
          * @function $3Dmol.GLViewer#render
          */
-        this.render = function() {
-
-            updateClickables(); //must render for clickable styles to take effect
+        this.render = function(callback) {
+            renderer.setViewport();
             var time1 = new Date();
+            updateClickables(); //must render for clickable styles to take effect
             var view = this.getView();
             
             var i, n;
@@ -759,9 +1096,41 @@ $3Dmol.GLViewer = (function() {
             this.setView(view); // Calls show() => renderer render
             var time2 = new Date();
             //console.log("render time: " + (time2 - time1));
+            if(typeof callback ==='function'){
+                callback(this);
+               // console.log("render time: " + (time2 - time1));
+            }
             return this;
         };
 
+        /** @param {ATomSelectionSpec} sel
+         * @return list of models specified by sel
+         */
+        function getModelList(sel) {
+            var ms = []
+            if (typeof sel.model === "undefined") {
+                for (i = 0; i < models.length; i++) {
+                    if (models[i])
+                        ms.push(models[i]);
+                }
+            } else { // specific to some models
+                ms = sel.model;
+                if (!$.isArray(ms))
+                    ms = [ ms ];
+                
+                for (var i = 0; i < ms.length; i++) {
+                        //allow referencing models by order of creation
+                    if(typeof ms[i] === 'number') {
+                        var index = ms[i];
+                        //support python backward indexing
+                        if(index < 0) index += models.length;
+                        ms[i] = models[index];
+                    }             
+                }
+            }
+            
+            return ms;            
+        }
         /**
          * 
          * @param {AtomSelectionSpec}
@@ -773,21 +1142,9 @@ $3Dmol.GLViewer = (function() {
             if (typeof (sel) === "undefined")
                 sel = {};
 
-            var ms = [];
-            var i;
+            var ms = getModelList(sel);
 
-            if (typeof sel.model === "undefined") {
-                for (i = 0; i < models.length; i++) {
-                    if (models[i])
-                        ms.push(models[i]);
-                }
-            } else { // specific to some models
-                ms = sel.model;
-                if (!$.isArray(ms))
-                    ms = [ ms ];
-            }
-
-            for (i = 0; i < ms.length; i++) {
+            for (var i = 0; i < ms.length; i++) {
                 atoms = atoms.concat(ms[i].selectedAtoms(sel));
             }
 
@@ -806,21 +1163,9 @@ $3Dmol.GLViewer = (function() {
             if (typeof (sel) === "undefined")
                 sel = {};
 
-            var ms = [];
-            var i;
-
-            if (typeof sel.model === "undefined") {
-                for (i = 0; i < models.length; i++) {
-                    if (models[i])
-                        ms.push(models[i]);
-                }
-            } else { // specific to some models
-                ms = sel.model;
-                if (!$.isArray(ms))
-                    ms = [ ms ];
-            }
-
-            for (i = 0; i < ms.length; i++) {
+            var ms = getModelList(sel);
+            
+            for (var i = 0; i < ms.length; i++) {
                 if (ms[i].atomIsSelected(atom, sel))
                     return true;
             }
@@ -828,7 +1173,7 @@ $3Dmol.GLViewer = (function() {
             return false;
         }
 
-        
+
         /** return list of atoms selected by sel
          * 
          * @function $3Dmol.GLViewer#selectedAtoms
@@ -838,6 +1183,30 @@ $3Dmol.GLViewer = (function() {
         this.selectedAtoms = function(sel) {
             return getAtomsFromSel(sel);
         };
+
+        /**
+        * Returns valid values for the specified attribute in the given selection
+        * @function $3Dmol.GlViewer#getUniqueValues 
+        * @param {string} attribute
+        * @param {AtomSelectionSpec} sel
+        * @return {Array.<Object>}
+        *
+        */
+        this.getUniqueValues = function(attribute, sel){
+            if (typeof (sel) === "undefined")
+                sel = {};            
+            var atoms = getAtomsFromSel(sel);
+            var values = {};
+
+            for(var atom in atoms){
+                if(atoms[atom].hasOwnProperty(attribute)){
+                    var value = atoms[atom][attribute];
+                    values[value] = true;
+                }
+            }
+
+            return Object.keys(values);
+        }
         
         /**
          * Return pdb output of selected atoms (if atoms from pdb input)
@@ -855,6 +1224,194 @@ $3Dmol.GLViewer = (function() {
             return ret;
         };
 
+        //interpolate between two normalized quaternions (t between 0 and 1)
+        //https://en.wikipedia.org/wiki/Slerp
+        var slerp = function(v0, v1, t) {
+            // Compute the cosine of the angle between the two vectors.
+            //dot product
+            if(t == 1) return v1;
+            else if(t == 0) return v0;
+            var dot = v0.x*v1.x+v0.y*v1.y+v0.z*v1.z+v0.w*v1.w;
+            if (dot > 0.9995) {
+                // If the inputs are too close for comfort, linearly interpolate
+                // and normalize the result.
+                var result = new $3Dmol.Quaternion(
+                        v0.x+t*(v1.x-v0.x),
+                        v0.y+t*(v1.y-v0.y),
+                        v0.z+t*(v1.z-v0.z),
+                        v0.w+t*(v1.w-v0.w));
+                        
+                result.normalize();
+                return result;
+            }
+
+            // If the dot product is negative, the quaternions
+            // have opposite handed-ness and slerp won't take
+            // the shorted path. Fix by reversing one quaternion.
+            if (dot < 0.0) {
+                v1 = v1.clone().multiplyScalar(-1);
+                dot = -dot;
+            }  
+
+            if(dot > 1) dot = 1.0;
+            else if(dot < -1) dot = -1.0;
+
+            var theta_0 = Math.acos(dot);  // theta_0 = angle between input vectors
+            var theta = theta_0*t;    // theta = angle between v0 and result 
+
+            var v2 = v1.clone();
+            v2.sub(v0.clone().multiplyScalar(dot));
+            v2.normalize();              // { v0, v2 } is now an orthonormal basis
+
+            var c = Math.cos(theta);
+            var s = Math.sin(theta);
+            var ret = new $3Dmol.Quaternion(
+                    v0.x*c+v2.x*s,
+                    v0.y*c+v2.y*s,
+                    v0.z*c+v2.z*s,
+                    v0.w*c+v2.w*s
+            );
+            ret.normalize();
+            return ret;
+        };
+        var spinInterval;
+        this.spin = function(axis){
+            clearInterval(spinInterval)
+            if(typeof axis == 'undefined')
+                axis = 'y';
+            if(typeof axis == "boolean"){
+                if(!axis)
+                    return
+                else
+                    axis = 'y'
+            }
+
+            if(Array.isArray(axis)){
+               axis = {x:axis[0],y:axis[1],z:axis[2]} 
+            }
+            //out of bounds check
+
+            var viewer = this;
+
+            spinInterval = setInterval(
+                function(){
+                    viewer.rotate(1,axis)
+                }
+            ,25);            
+            
+        }
+        
+        //animate motion between current position and passed position
+        // can set some parameters to null
+        //if fixed is true will enforce the request animation, otherwise
+        //does relative updates
+        //positions objects have modelggroup position, rotation group position.z,
+        //and rotationgroup quaternion
+        //return array includes final position, but not current 
+        //the returned array includes an animate method
+        var animateMotion = function(duration, fixed, mpos, rz, rot, cam) {
+            var interval = 20;
+            var steps = Math.ceil(duration/interval);
+            if(steps < 1) steps = 1;
+            incAnim();
+            
+            var curr = {mpos:modelGroup.position.clone(),
+                    rz: rotationGroup.position.z,
+                    rot: rotationGroup.quaternion.clone(),
+                    cam: lookingAt.clone()};
+            
+            if(fixed) { //precompute path and stick to it
+                var steps = new Array(steps);
+                var n = steps.length;
+                for(var i = 0; i < n; i++) {
+                    var frac = (i+1)/n;
+                    var next = {mpos: curr.mpos, rz:curr.rz, rot:curr.rot};
+                    if(mpos) {
+                        next.mpos = mpos.clone().sub(curr.mpos).multiplyScalar(frac).add(curr.mpos);
+                    }
+                    if(typeof(rz) != 'undefined' && rz != null) {
+                        next.rz = curr.rz+frac*(rz-curr.rz);
+                    }
+                    if(rot) {
+                        next.rot = slerp(curr.rot,rot,frac);
+                    }
+                    if(cam) {
+                        next.cam = cam.clone().sub(curr.cam).multiplyScalar(frac).add(curr.cam);
+                    }
+                    
+                    steps[i] = next;
+                }
+                
+                var step = 0;
+                var callback = function() {
+                    var p = steps[step];
+                    step += 1;
+                    if(p.mpos) {
+                        modelGroup.position = p.mpos;
+                    }
+                    if(p.rz) {
+                        rotationGroup.position.z = p.rz;
+                    }
+                    if(p.rot) {
+                        rotationGroup.quaternion = p.rot;
+                    }
+                    if(p.cam) {
+                        camera.lookAt(p.cam);
+                    }
+                    
+                    if(step < steps.length) {
+                        setTimeout(callback, interval);
+                    } else {
+                        decAnim();
+                    }
+                    show();
+                }
+                setTimeout(callback, interval);
+               
+            } else { //relative update
+                var delta = {};
+                var frac = 1.0/steps;
+                if(mpos) {
+                    delta.mpos = mpos.clone().sub(curr.mpos).multiplyScalar(frac);
+                }
+                if(typeof(rz) != 'undefined' && rz != null) {
+                    delta.rz = frac*(rz-curr.rz);
+                }
+                if(rot) {
+                    var next = slerp(curr.rot,rot,frac);
+                    //comptute step delta rotation
+                    delta.rot = curr.rot.clone().inverse().multiply(next);
+                }
+                if(cam) {
+                    delta.cam = cam.clone().sub(curr.cam).multiplyScalar(frac);
+                }
+                var step = 0.0;
+                var callback = function() {
+                    step += 1;
+                    if(delta.mpos) {
+                        modelGroup.position.add(delta.mpos);
+                    }
+                    if(delta.rz) {
+                        rotationGroup.position.z += delta.rz;
+                    }
+                    if(delta.rot) {
+                        rotationGroup.quaternion.multiply(delta.rot);
+                    }
+                    if(delta.cam) {
+                        lookingAt.add(delta.cam);
+                        camera.lookAt(lookingAt);
+                    }
+                    
+                    if(step < steps) {
+                        setTimeout(callback, interval);
+                    } else {
+                        decAnim();
+                    }
+                    show();
+                }
+                setTimeout(callback, interval);
+            }
+        }
         /**
          * Zoom current view by a constant factor
          * 
@@ -862,13 +1419,36 @@ $3Dmol.GLViewer = (function() {
          * @param {number}
          *            [factor] - Magnification factor. Values greater than 1
          *            will zoom in, less than one will zoom out. Default 2.
-         * 
-         */
-        this.zoom = function(factor) {
+         * @param {number}
+         *            [animationDuration] - an optional parameter that denotes
+         *            the duration of a zoom animation
+         * @param {Boolean} [fixedPath] - if true animation is constrained to 
+         *      requested motion, overriding updates that happen during the animation
+         * @example   
+    $.get('data/4csv.pdb', function(data) {
+      viewer.addModel(data,'pdb');
+      viewer.setStyle({cartoon:{},stick:{}});
+      viewer.zoomTo();
+      viewer.render(callback);
+    });
+    
+             */
+        this.zoom = function(factor,animationDuration,fixedPath) {
             var factor = factor || 2;
+            var animationDuration = animationDuration!==undefined ? animationDuration : 0;
             var scale = (CAMERA_Z - rotationGroup.position.z) / factor;
-            rotationGroup.position.z = CAMERA_Z - scale;
-            show();
+            var final_z = CAMERA_Z - scale;
+
+            if(animationDuration>0){
+                animateMotion(animationDuration,fixedPath,
+                        modelGroup.position, 
+                        adjustZoomToLimits(final_z), 
+                        rotationGroup.quaternion,
+                        lookingAt);
+            } else { //no animation
+                rotationGroup.position.z = adjustZoomToLimits(final_z);
+                show();
+            }
             return this;
         };
         
@@ -879,40 +1459,104 @@ $3Dmol.GLViewer = (function() {
          * @function $3Dmol.GLViewer#translate
          * @param {number} x
          * @param {number} y
-         * 
+         * @param {number}
+         *            [animationDuration] - an optional parameter that denotes
+         *            the duration of a zoom animation
+         * @param {Boolean} [fixedPath] - if true animation is constrained to 
+         *      requested motion, overriding updates that happen during the animation         *            
+         * @example     $.get('data/4csv.pdb', function(data) {
+      viewer.addModel(data,'pdb');
+      viewer.setStyle({cartoon:{},stick:{}});
+      viewer.zoomTo();
+      viewer.translate(100,10);         
+
+      viewer.render(callback);
+    });
          */
-        this.translate = function(x, y) {
-            
+        this.translate = function(x, y, animationDuration, fixedPath) {
+            var animationDuration = animationDuration!==undefined ? animationDuration : 0;
             var dx = x/WIDTH;
             var dy = y/HEIGHT;
             var v = new $3Dmol.Vector3(0,0,-CAMERA_Z);
-
+            
             projector.projectVector(v, camera);
             v.x -= dx;
             v.y -= dy;
             projector.unprojectVector(v, camera);
             v.z = 0;            
-            lookingAt.add(v);
-            camera.lookAt(lookingAt);
-            show();
+
+            var final_position=lookingAt.clone().add(v);
+            if(animationDuration>0){
+                animateMotion(animationDuration,fixedPath,
+                        modelGroup.position,
+                        rotationGroup.position.z, 
+                        rotationGroup.quaternion,
+                        final_position);
+            } else { //no animation
+                lookingAt = final_position;
+                camera.lookAt(lookingAt);
+                show();
+            }
             return this;
         };
         
 
         /**
-         * Zoom to center of atom selection
+         * Adjust slab to fully enclose selection (default everything).
          * 
-         * @function $3Dmol.GLViewer#zoomTo
+         * @function $3Dmol.GLViewer#fitSlab
          * @param {Object}
          *            [sel] - Selection specification specifying model and atom
          *            properties to select. Default: all atoms in viewer
-         * @example // Assuming we have created a model of a protein with
-         *          multiple chains (e.g. from a PDB file), focus on atoms in
-         *          chain B glviewer.zoomTo({chain: 'B'});
-         *  // Focus on centroid of all atoms of all models in this
-         * viewer glviewer.zoomTo(); // (equivalent to glviewer.zoomTo({}) )
          */
-        this.zoomTo = function(sel) {
+        this.fitSlab = function(sel) {
+            sel = sel || {};
+            var atoms = getAtomsFromSel(sel);
+            var tmp = $3Dmol.getExtent(atoms);
+
+            // fit to bounding box
+            var x = tmp[1][0] - tmp[0][0], 
+                y = tmp[1][1] - tmp[0][1], 
+                z = tmp[1][2] - tmp[0][2];
+
+            var maxD = Math.sqrt(x * x + y * y + z * z);
+            if (maxD < 5)
+                maxD = 5;
+
+            // use full bounding box for slab/fog
+            slabNear = -maxD / 1.9;
+            slabFar = maxD / 2;
+
+            return this;
+        };        
+        
+        /**
+         * Re-center the viewer around the provided selection (unlike zoomTo, does not zoom).
+         * 
+         * @function $3Dmol.GLViewer#center
+         * @param {Object}
+         *            [sel] - Selection specification specifying model and atom
+         *            properties to select. Default: all atoms in viewer
+         * @param {number}
+         *            [animationDuration] - an optional parameter that denotes
+         *            the duration of a zoom animation
+         * @param {Boolean} [fixedPath] - if true animation is constrained to 
+         *      requested motion, overriding updates that happen during the animation         *            
+         * @example // if the user were to pass the animationDuration value to 
+         *           // the function like so viewer.zoomTo({resn:'STI'},1000);
+         *         //   the program would center on resn 'STI' over the course 
+         *         //   of 1 second(1000 milleseconds).
+         *  // Reposition to centroid of all atoms of all models in this
+         * //viewer glviewer.center();
+    $.get('data/4csv.pdb', function(data) {
+      viewer.addModel(data,'pdb');
+      viewer.setStyle({cartoon:{},stick:{}});
+      viewer.center();
+      viewer.render(callback);
+    });
+         */
+        this.center = function(sel,animationDuration,fixedPath){
+             animationDuration=animationDuration!==undefined ? animationDuration : 0;
             var allatoms, alltmp;
             sel = sel || {};
             var atoms = getAtomsFromSel(sel);
@@ -922,20 +1566,21 @@ $3Dmol.GLViewer = (function() {
                 //include shapes when zooming to full scene
                 //TODO: figure out a good way to specify shapes as part of a selection
                 $.each(shapes, function(i, shape) {
-                	if(shape && shape.boundingSphere && shape.boundingSphere.center)
-                	    var c = shape.boundingSphere.center;
-                	    var r = shape.boundingSphere.radius;
-                	    if(r > 0) {
-                	        //make sure full shape is visible
+                    if(shape && shape.boundingSphere && shape.boundingSphere.center) {
+                        var c = shape.boundingSphere.center;
+                        var r = shape.boundingSphere.radius;
+                        if(r > 0) {
+                            //make sure full shape is visible
                             atoms.push(new $3Dmol.Vector3(c.x+r,c.y,c.z));
                             atoms.push(new $3Dmol.Vector3(c.x-r,c.y,c.z));
                             atoms.push(new $3Dmol.Vector3(c.x,c.y+r,c.z));
                             atoms.push(new $3Dmol.Vector3(c.x,c.y-r,c.z));
                             atoms.push(new $3Dmol.Vector3(c.x,c.y,c.z+r));
                             atoms.push(new $3Dmol.Vector3(c.x,c.y,c.z-r));
-                	    } else {
+                        } else {
                             atoms.push(c);
-                	    }
+                        }
+                    }
                 });
                 tmp = $3Dmol.getExtent(atoms);
                 allatoms = atoms;
@@ -949,7 +1594,7 @@ $3Dmol.GLViewer = (function() {
 
             // use selection for center
             var center = new $3Dmol.Vector3(tmp[2][0], tmp[2][1], tmp[2][2]);
-            modelGroup.position = center.clone().multiplyScalar(-1);
+
             // but all for bounding box
             var x = alltmp[1][0] - alltmp[0][0], y = alltmp[1][1]
                     - alltmp[0][1], z = alltmp[1][2] - alltmp[0][2];
@@ -981,14 +1626,148 @@ $3Dmol.GLViewer = (function() {
             }
             
             var maxD = Math.sqrt(maxDsq)*2;
-
-            rotationGroup.position.z = -(maxD * 0.5
-                    / Math.tan(Math.PI / 180.0 * camera.fov / 2) - CAMERA_Z);
-            show();
-            
+            var finalpos = center.clone().multiplyScalar(-1);
+            if(animationDuration>0){
+                animateMotion(animationDuration,fixedPath,
+                        finalpos, 
+                        rotationGroup.position.z, 
+                        rotationGroup.quaternion,
+                        lookingAt);
+            } else { //no animation 
+                modelGroup.position = finalpos;
+                show();
+            }
             return this;
         };
         
+        /**
+         * Zoom to center of atom selection.  The slab will be set appropriately for
+         * the selection, unless an empty selection is provided, in which case there will be no slab.
+         * 
+         * @function $3Dmol.GLViewer#zoomTo
+         * @param {Object}
+         *            [sel] - Selection specification specifying model and atom
+         *            properties to select. Default: all atoms in viewer
+         * @param {number}
+         *            [animationDuration] - an optional parameter that denotes
+         *            the duration of a zoom animation
+         * @param {Boolean} [fixedPath] - if true animation is constrained to 
+         *      requested motion, overriding updates that happen during the animation         *            
+          * @example   
+    
+
+              $.get('data/1fas.pqr', function(data){
+                  viewer.addModel(data, "pqr");
+                  $.get("data/1fas.cube",function(volumedata){
+                      viewer.addSurface($3Dmol.SurfaceType.VDW, {
+                          opacity:0.85,
+                          voldata: new $3Dmol.VolumeData(volumedata, "cube"),
+                          volscheme: new $3Dmol.Gradient.Sinebow($3Dmol.getPropertyRange(viewer.selectedAtoms(),'charge'))
+                      },{});
+                      
+                  viewer.render();
+                  });
+                  viewer.zoomTo();
+                });
+         */
+        this.zoomTo = function(sel, animationDuration,fixedPath) {
+            animationDuration=animationDuration!==undefined ? animationDuration : 0;
+            var allatoms, alltmp;
+            sel = sel || {};
+            var atoms = getAtomsFromSel(sel);
+            var tmp = $3Dmol.getExtent(atoms);
+
+            if($.isEmptyObject(sel)) {
+                //include shapes when zooming to full scene
+                //TODO: figure out a good way to specify shapes as part of a selection
+                $.each(shapes, function(i, shape) {
+                if(shape && shape.boundingSphere && shape.boundingSphere.center) {
+                    var c = shape.boundingSphere.center;
+                    var r = shape.boundingSphere.radius;
+                    if(r > 0) {
+                        //make sure full shape is visible
+                            atoms.push(new $3Dmol.Vector3(c.x+r,c.y,c.z));
+                            atoms.push(new $3Dmol.Vector3(c.x-r,c.y,c.z));
+                            atoms.push(new $3Dmol.Vector3(c.x,c.y+r,c.z));
+                            atoms.push(new $3Dmol.Vector3(c.x,c.y-r,c.z));
+                            atoms.push(new $3Dmol.Vector3(c.x,c.y,c.z+r));
+                            atoms.push(new $3Dmol.Vector3(c.x,c.y,c.z-r));
+                    } else {
+                            atoms.push(c);
+                    }
+                  }
+                });
+                tmp = $3Dmol.getExtent(atoms);
+                allatoms = atoms;
+                alltmp = tmp;
+
+            }
+            else {
+                allatoms = getAtomsFromSel({});
+                alltmp = $3Dmol.getExtent(allatoms);
+            }
+
+            // use selection for center
+            var center = new $3Dmol.Vector3(tmp[2][0], tmp[2][1], tmp[2][2]);
+
+            
+            // but all for bounding box
+            var x = alltmp[1][0] - alltmp[0][0], y = alltmp[1][1]
+                    - alltmp[0][1], z = alltmp[1][2] - alltmp[0][2];
+
+            var maxD = Math.sqrt(x * x + y * y + z * z);
+            if (maxD < 5)
+                maxD = 5;
+
+            // use full bounding box for slab/fog
+            slabNear = -maxD / 1.9;
+            slabFar = maxD / 2;
+            
+            //if we are selecting everything, do not slab
+            if(Object.keys(sel).length === 0) {
+                slabNear = -999999;
+                slabFar = 999999;
+            }
+
+            // for zoom, use selection box
+            x = tmp[1][0] - tmp[0][0];
+            y = tmp[1][1] - tmp[0][1];
+            z = tmp[1][2] - tmp[0][2];
+            maxD = Math.sqrt(x * x + y * y + z * z);
+            if (maxD < 5)
+                maxD = 5;
+            
+            //find the farthest atom from center to get max distance needed for view
+            var maxDsq = 25;
+            for (var i = 0; i < atoms.length; i++) {
+                if(atoms[i]) {
+                    var dsq = center.distanceToSquared(atoms[i]);
+                    if(dsq > maxDsq)
+                        maxDsq = dsq;
+                }
+            }
+            
+            var maxD = Math.sqrt(maxDsq)*2;
+            var finalpos = center.clone().multiplyScalar(-1);
+            var finalz =  -(maxD * 0.5
+                    / Math.tan(Math.PI / 180.0 * camera.fov / 2) - CAMERA_Z);
+                    
+            finalz = adjustZoomToLimits(finalz);
+            if(animationDuration>0){
+                animateMotion(animationDuration,fixedPath,
+                        finalpos,
+                        finalz, 
+                        rotationGroup.quaternion,
+                        lookingAt);                
+            } else {
+                modelGroup.position = finalpos;
+                rotationGroup.position.z = finalz;
+                show();
+            }
+            return this;
+        
+        };
+
         /**
          * Set slab of view (contents outside of slab are clipped). M
          * Must call render to update.
@@ -1018,50 +1797,100 @@ $3Dmol.GLViewer = (function() {
          * @function $3Dmol.GLViewer#addLabel
          * @param {string}
          *            text - Label text
-         * @param {Object}
-         *            data - Label style specification
+         * @param {LabelSpec}
+         *            options - Label style specification
+          @param {AtomSelection}
+         *            sel - Set position of label to center of this selection
          * @return {$3Dmol.Label}
          * 
          * @example
-         *  // Assuming glviewer contains a model representing a protein, label
-         * all alpha carbons with their residue name
-         *  // Select all alpha carbons (have property atom : "CA") from last
-         * model added var atoms =
-         * glviewer.getModel().selectedAtoms({atom:"CA"}); var labels = [];
-         * 
-         * for (var a in atoms) { var atom = atoms[a];
-         *  // Create label at alpha carbon's position displaying atom's residue
-         * and residue number var labelText = atom.resname + " " + atom.resi;
-         * 
-         * var l = glviewer.createLabel(labelText, {fontSize: 12, position: {x:
-         * atom.x, y: atom.y, z: atom.z});
-         * 
-         * labels.push(l); }
+         *  $3Dmol.download("pdb:2EJ0",viewer,{},function(){
+                  
+                  viewer.addLabel("Aromatic", {position: {x:-6.89, y:0.75, z:0.35}, backgroundColor: 0x800080, backgroundOpacity: 0.8});
+                  viewer.addLabel("Label",{font:'sans-serif',fontSize:18,fontColor:'white',fontOpacity:1,borderThickness:1.0,
+                                           borderColor:'red',borderOpacity:0.5,backgroundColor:'black',backgroundOpacity:0.5,
+                                           position:{x:50.0,y:0.0,z:0.0},inFront:true,showBackground:true});
+                  viewer.setStyle({chain:'A'},{cross:{hidden:true}});
+                  viewer.setStyle({chain:'B'},{cross:{hidden:false,
+                                                      linewidth:1.0,
+                                                      colorscheme:'greenCarbon'}});
+                  viewer.setStyle({chain:'C'},{cross:{hidden:false,
+                                                      linewidth:1.0,
+                                                      radius:0.5}});
+                  viewer.setStyle({chain:'D'},{cross:{hidden:false,
+                                                      linewidth:10.0}});
+                  viewer.setStyle({chain:'E'},{cross:{hidden:false,
+                                                      linewidth:1.0,
+                                                      color:'black'}});
+                  
+                  viewer.render();
 
-         *  // Render labels glviewer.render();
+                  
+                });
+            
          */
-        this.addLabel = function(text, data) {
-            var label = new $3Dmol.Label(text, data);
+        this.addLabel = function(text, options, sel) {
+            options = options || {};
+            if(sel) {
+                var extent = $3Dmol.getExtent(getAtomsFromSel(sel));
+                options.position = {x: extent[2][0], y: extent[2][1], z: extent[2][2]};
+            }
+            var label = new $3Dmol.Label(text, options);
             label.setContext();
             modelGroup.add(label.sprite);
+            if(options.fixed)
+                fixed_labels.push(labels.length);
             labels.push(label);
             show();
             return label;
         };
         
+
+
         /** Add residue labels.  This will generate one label per a
          * residue within the selected atoms.  The label will be at the
          * centroid of the atoms and styled according to the passed style.
          * The label text will be [resn][resi]
          * 
+         * @function $3Dmol.GLViewer#addResLabels
          * @param {Object} sel
          * @param {Object} style
+         * 
+         * * @example  
+             $3Dmol.download("mmtf:2ll5",viewer,{},function(){
+                  viewer.setStyle({stick:{radius:0.15},cartoon:{}});
+                  viewer.addResLabels({hetflag:false}, {font: 'Arial', fontColor:'black',showBackground:false});
+                  viewer.zoomTo();
+                  viewer.render();                  
+                });
          */
         this.addResLabels = function(sel, style) {
             applyToModels("addResLabels", sel, this, style);
+            show();
             return this;
         }
 
+        /** Add property labels.  This will generate one label per a selected
+         * atom at the atom's coordinates with the property value as the label text.
+         * 
+         * @function $3Dmol.GLViewer#addPropertyLabels
+         * @param {string} prop - property name
+         * @param {Object} sel
+         * @param {Object} style
+         * 
+         * * @example  
+             $3Dmol.download("cid:5291",viewer,{},function(){
+                  viewer.setStyle({stick: {radius:.2}});
+                  viewer.addPropertyLabels("index",{not:{elem:'H'}}, {fontColor:'black',font: 'sans-serif', fontSize: 28, showBackground:false,alignment:'center'});
+                  viewer.zoomTo();
+                  viewer.render();                  
+                });
+         */
+        this.addPropertyLabels = function(prop, sel, style) {
+            applyToModels("addPropertyLabels", prop, sel, this, style);
+            show();
+            return this;
+        }        
         /**
          * Remove label from viewer
          * 
@@ -1069,12 +1898,18 @@ $3Dmol.GLViewer = (function() {
          * @param {$3Dmol.Label}
          *            label - $3Dmol label
          * 
-         * @example // Remove labels created in [addLabel example]{@link $3Dmol.GLViewer#addLabel}
-         * 
-         * for (var i = 0; i < labels.length; i++) {
-         * glviewer.removeLabel(label); }
-         * 
-         * glviewer.render();
+         * @example // Remove labels created in 
+         $3Dmol.download("pdb:2EJ0",viewer,{},function(){
+         *    viewer.addLabel("Aromatic", {position: {x:-6.89, y:0.75, z:0.35}, backgroundColor: 0x800080, backgroundOpacity: 0.8});
+                  viewer.addLabel("Label",{font:'sans-serif',fontSize:18,fontColor:'white',fontOpacity:1,borderThickness:1.0,
+                                           borderColor:'red',borderOpacity:0.5,backgroundColor:'black',backgroundOpacity:0.5,
+                                           position:{x:50.0,y:0.0,z:0.0},inFront:true,showBackground:true});
+                  viewer.remove
+                  viewer.render();
+
+                  
+                });
+
          */
         this.removeLabel = function(label) {
             //todo: don't do the linear search
@@ -1086,8 +1921,11 @@ $3Dmol.GLViewer = (function() {
                     break;
                 }
             }
+            show();
             return this;
         };
+
+
 
         /**
          * Remove all labels from viewer
@@ -1099,6 +1937,7 @@ $3Dmol.GLViewer = (function() {
                 modelGroup.remove(labels[i].sprite);
             }
             labels.splice(0,labels.length); //don't overwrite in case linked
+            show();
             return this;
         };
         
@@ -1195,37 +2034,116 @@ $3Dmol.GLViewer = (function() {
             return this;
         }
 
+        //gets the center of the selection 
+        var getSelectionCenter = function(spec){
+            if(spec.hasOwnProperty("x") && spec.hasOwnProperty("y") && spec.hasOwnProperty("z"))
+                return spec;
+            var atoms = getAtomsFromSel(spec);
+            if(atoms.length == 0)
+                return {x:0,y:0,z:0};
+
+            var extent = $3Dmol.getExtent(atoms)
+            return {x:extent[0][0]+(extent[1][0]-extent[0][0])/2,y:extent[0][1]+(extent[1][1]-extent[0][1])/2,z:extent[0][2]+(extent[1][2]-extent[0][2])/2};
+        }
+
         /**
          * Create and add sphere shape. This method provides a shorthand 
          * way to create a spherical shape object
          * 
          * @function $3Dmol.GLViewer#addSphere
-         * @param {SphereSpec} spec - Sphere shape style specification
+         * @param {SphereShapeSpec} spec - Sphere shape style specification
          * @return {$3Dmol.GLShape}
+         @example
+         
+         viewer.addSphere({center:{x:0,y:0,z:0},radius:10.0,color:'red'});
+         
+         viewer.render();
          */
         this.addSphere = function(spec) {
             spec = spec || {};
+
+            spec.center = getSelectionCenter(spec.center);
             var s = new $3Dmol.GLShape(spec);
             s.shapePosition = shapes.length;
             s.addSphere(spec);
             shapes.push(s);
-
+            s.finalize(); //finalize shape for memory efficiency, assume shape won't be extended
             return s;
         };
 
+        /**
+         * Create and add box shape. This method provides a shorthand 
+         * way to create a box shape object
+         * 
+         * @function $3Dmol.GLViewer#addBox
+         * @param {BoxSpec} spec - Box shape style specification
+         * @return {$3Dmol.GLShape}
+         @example
+         
+         viewer.addLine({color:'red',start:{x:0,y:0,z:0},end:{x:5,y:0,z:0}});
+         viewer.addLine({color:'blue',start:{x:0,y:0,z:0},end:{x:0,y:5,z:0}});
+         viewer.addLine({color:'green',start:{x:0,y:0,z:0},end:{x:0,y:0,z:5}});
+
+         viewer.addBox({center:{x:0,y:0,z:0},dimensions: {w:3,h:4,d:2},color:'magenta'});
+         viewer.zoomTo();
+         viewer.rotate(45, {x:1,y:1,z:1});
+         viewer.render();
+         */
+        this.addBox = function(spec) {
+            spec = spec || {};
+
+            if(spec.corner != undefined) {
+                spec.corner = getSelectionCenter(spec.corner);
+            }
+            if(spec.center != undefined) {
+                spec.center = getSelectionCenter(spec.center);
+            }
+
+            var s = new $3Dmol.GLShape(spec);
+            s.shapePosition = shapes.length;
+            s.addBox(spec);
+            shapes.push(s);
+            s.finalize(); //finalize shape for memory efficiency, assume shape won't be extended
+
+            return s;
+        };
+        
         /**
          * Create and add arrow shape
          * 
          * @function $3Dmol.GLViewer#addArrow
          * @param {ArrowSpec} spec - Style specification
          * @return {$3Dmol.GLShape}
+         @example
+        $3Dmol.download("pdb:4DM7",viewer,{},function(){
+
+                  viewer.setBackgroundColor(0xffffffff);
+                  viewer.addArrow({
+                      start: {x:-10.0, y:0.0, z:0.0},
+                      end: {x:0.0, y:-10.0, z:0.0},
+                      radius: 1.0,
+                      radiusRadio:1.0,
+                      mid:1.0,
+                      clickable:true,
+                      callback:function(){
+                          this.color.setHex(0xFF0000FF);
+                          viewer.render( );
+                      }
+                  });
+                  viewer.render();
+                });
          */
         this.addArrow = function(spec) {
             spec = spec || {};
+            
+            spec.start = getSelectionCenter(spec.start)
+            spec.end = getSelectionCenter(spec.end)           
+            
             var s = new $3Dmol.GLShape(spec);
             s.shapePosition = shapes.length;
             s.addArrow(spec);
             shapes.push(s);
+            s.finalize(); //finalize shape for memory efficiency, assume shape won't be extended
 
             return s;
         };
@@ -1236,16 +2154,88 @@ $3Dmol.GLViewer = (function() {
          * @function $3Dmol.GLViewer#addCylinder
          * @param {CylinderSpec} spec - Style specification
          * @return {$3Dmol.GLShape}
+
+          @example
+         viewer.setBackgroundColor(0xffffffff);
+              viewer.addCylinder({start:{x:0.0,y:0.0,z:0.0},
+                                  end:{x:10.0,y:0.0,z:0.0},
+                                  radius:1.0,
+                                  fromCap:1,
+                                  toCap:2,
+                                  color:'red',
+                                  hoverable:true,
+                                  clickable:true,
+                                  callback:function(){ this.color.setHex(0x00FFFF00);viewer.render( );},
+                                  hover_callback: function(){ viewer.render( );},
+                                  unhover_callback: function(){ this.color.setHex(0xFF000000);viewer.render( );}
+                                 });
+              viewer.addCylinder({start:{x:0.0,y:2.0,z:0.0},
+                                  end:{x:0.0,y:10.0,z:0.0},
+                                  radius:0.5,
+                                  fromCap:false,
+                                  toCap:true,
+                                  color:'teal'});
+              viewer.addCylinder({start:{x:15.0,y:0.0,z:0.0},
+                                  end:{x:20.0,y:0.0,z:0.0},
+                                  radius:1.0,
+                                  color:'black',
+                                  fromCap:false,
+                                  toCap:false});
+              viewer.render();
          */
         this.addCylinder = function(spec) {
             spec = spec || {};
+
+            spec.start = getSelectionCenter(spec.start)
+            spec.end = getSelectionCenter(spec.end)   
+
             var s = new $3Dmol.GLShape(spec);
             s.shapePosition = shapes.length;
-            s.addCylinder(spec);
+            if(spec.dashed)
+                s.addDashedCylinder(spec);
+            else
+                s.addCylinder(spec);
             shapes.push(s);
+            s.finalize(); //finalize shape for memory efficiency, assume shape won't be extended
 
             return s;
         };
+
+        /**
+         * Create and add Curve shape
+         * 
+         * @function $3Dmol.GLViewer#addCurve
+         * @param {CurveSpec} spec - Style specification
+         * @return {$3Dmol.GLShape}
+
+         @example
+              viewer.addCurve({points: [{x:0.0,y:0.0,z:0.0}, {x:5.0,y:3.0,z:0.0}, {x:5.0,y:7.0,z:0.0}, {x:0.0,y:10.0,z:0.0}],
+                                  radius:0.5,
+                                  smooth: 10,
+                                  fromArrow:false,
+                                  toArrow: true,
+                                  color:'orange',                                  
+                                  });
+              viewer.addCurve({points: [{x:-1,y:0.0,z:0.0}, {x:-5.0,y:5.0,z:0.0}, {x:-2,y:10.0,z:0.0}],
+                                  radius:1,
+                                  fromArrow:true,
+                                  toArrow: false,
+                                  color:'purple',                                  
+                                  });
+              viewer.zoomTo();
+              viewer.render();
+         */
+        this.addCurve = function(spec) {
+            spec = spec || {};            
+            var s = new $3Dmol.GLShape(spec);
+            s.shapePosition = shapes.length;
+            s.addCurve(spec);
+            shapes.push(s);
+            s.finalize(); //finalize shape for memory efficiency, assume shape won't be extended
+
+            return s;
+        };
+
 
         /**
          * Create and add line shape
@@ -1253,9 +2243,25 @@ $3Dmol.GLViewer = (function() {
          * @function $3Dmol.GLViewer#addLine
          * @param {LineSpec} spec - Style specification, can specify dashed, dashLength, and gapLength
          * @return {$3Dmol.GLShape}
+         @example
+         $3Dmol.download("pdb:2ABJ",viewer,{},function(){
+                  
+                  viewer.setViewStyle({style:"outline"});
+                  viewer.setStyle({chain:'A'},{sphere:{hidden:true}});
+                  viewer.setStyle({chain:'D'},{sphere:{radius:3.0}});
+                  viewer.setStyle({chain:'G'},{sphere:{colorscheme:'greenCarbon'}});
+                  viewer.setStyle({chain:'J'},{sphere:{color:'blue'}});
+                  viewer.addLine({dashed:true,start:{x:0,y:0,z:0},end:{x:100,y:100,z:100}});
+                  viewer.render();
+              });
+
          */
         this.addLine = function(spec) {
             spec = spec || {};
+
+            spec.start = getSelectionCenter(spec.start)
+            spec.end = getSelectionCenter(spec.end)    
+
             spec.wireframe = true;
             var s = new $3Dmol.GLShape(spec);
             s.shapePosition = shapes.length;
@@ -1264,6 +2270,7 @@ $3Dmol.GLViewer = (function() {
             else
                 s.addLine(spec);
             shapes.push(s);
+            s.finalize(); //finalize shape for memory efficiency, assume shape won't be extended
 
             return s;
         };
@@ -1338,18 +2345,21 @@ $3Dmol.GLViewer = (function() {
         this.addRotCenter = function(model){
             var data = model.getConnData();
             var s = new $3Dmol.GLShape({'wireframe' : true});
+            var atoms = getAtomsFromSel();
             if (data[2] == 'coc'){
-                s.addSphere({color: 'red', radius : 0.6,center : this.center-this.center});
+                s.addSphere({center:{'x':0.0,'y':0.0,'z':0.0}, radius:0.6,color:"red"});
+                //s.addSphere({center:this.BBcenter - this.BBcenter, radius:0.4,color:"red"});
+                //s.addSphere({center:this.BBcenter , radius:0.6,color:"green"});
                 shapes.push(s);
                 show();
             }
             else if (data[2] == 'com'){
-                s.addSphere({color: 'blue', radius : 0.6,center : this.center-this.center});
+                s.addSphere({color: 'blue', radius : 0.6,center : {'x':0.0,'y':0.0,'z':0.0}});
                 shapes.push(s);
                 show();
             }
             else if (data[2] == 'special'){
-                s.addSphere({color: 'black', radius : 0.6,center : this.center-this.center});
+                s.addSphere({color: 'black', radius : 0.6,center : {'x':0.0,'y':0.0,'z':0.0}});
                 shapes.push(s);
                 show();
             };
@@ -1358,9 +2368,9 @@ $3Dmol.GLViewer = (function() {
         this.shiftCenter = function(model){
             var atoms = getAtomsFromSel();
             for (i=0;i<atoms.length;i++){
-                atoms[i].x = atoms[i].x - this.center['x'];
-                atoms[i].y = atoms[i].y - this.center['y'];
-                atoms[i].z = atoms[i].z - this.center['z'];
+                atoms[i].x = atoms[i].x - this.BBcenter['x'];
+                atoms[i].y = atoms[i].y - this.BBcenter['y'];
+                atoms[i].z = atoms[i].z - this.BBcenter['z'];
             };
         }
         
@@ -1410,11 +2420,10 @@ $3Dmol.GLViewer = (function() {
 
         this.removePBonds = function(model, cut){
             var atoms = getAtomsFromSel();
-            for (i=1;i<atoms.length;i++){
+            for (i=0;i<atoms.length;i++){
                 nbonds = [];
                 nbondorder = [];
                 for (j=0;j<atoms[i].bonds.length;j++){
-                    //var b = this.calcBond(atoms[i],atoms[j]);
                     var b = this.calcBond(atoms[i],atoms[atoms[i].bonds[j]]);
                     if (b < cut*cut){
                         nbonds.push(atoms[i].bonds[j]);
@@ -1448,7 +2457,7 @@ $3Dmol.GLViewer = (function() {
             }
             //console.log(model.getElemMass(atoms[0]));
             vcoc = new $3Dmol.Vector3(coc[0], coc[1], coc[2]);
-            this.center = vcoc
+            this.BBcenter = vcoc
             //s.addSphere({color: 'red', radius : 0.6,center : vcoc});
             //shapes.push(s);
             //show();
@@ -1461,7 +2470,7 @@ $3Dmol.GLViewer = (function() {
             vspec = new $3Dmol.Vector3(data[3][0], data[3][1], data[3][2]);
             //s.addSphere({color: 'black', radius : 0.6,center : vspec});
             //shapes.push(s);
-            this.center = vspec
+            this.BBcenter = vspec
             //show();
         }
 
@@ -1478,7 +2487,7 @@ $3Dmol.GLViewer = (function() {
                 com[2] = com[2] + (1.0/natoms * atoms[i].z);
             }
             vcom = new $3Dmol.Vector3(com[0], com[1], com[2]);
-            this.center = vcom;
+            this.BBcenter = vcom;
             return vcom
             //s.addSphere({color: 'blue', radius : 0.6,center : vcom});
             //shapes.push(s);
@@ -1666,7 +2675,7 @@ $3Dmol.GLViewer = (function() {
             com[1] = com[1]/mtot
             com[2] = com[2]/mtot
             vcom = new $3Dmol.Vector3(com[0], com[1], com[2]);
-            this.center = vcom;
+            this.BBcenter = vcom;
             return vcom
             //s.addSphere({color: 'blue', radius : 0.6,center : vcom});
             //shapes.push(s);
@@ -1692,26 +2701,31 @@ $3Dmol.GLViewer = (function() {
          * @return {$3Dmol.GLShape}  Line shape delineating unit cell.
          */
         this.addUnitCell = function(model) {
-
+            if(!model) model = this.getModel();
             var s = new $3Dmol.GLShape({'wireframe' : true});
             s.shapePosition = shapes.length;
             var data = model.getCrystData();
             if (data) {
-                var a = data.a, b = data.b, c = data.c, alpha = data.alpha, beta = data.beta, gamma = data.gamma;
-                alpha = alpha * Math.PI/180.0;
-                beta = beta * Math.PI/180.0;
-                gamma = gamma * Math.PI/180.0;
+
+                if (data.matrix) {
+                    var matrix = data.matrix
+                } else {
+                    var a = data.a, b = data.b, c = data.c, alpha = data.alpha, beta = data.beta, gamma = data.gamma;
+                    alpha = alpha * Math.PI/180.0;
+                    beta = beta * Math.PI/180.0;
+                    gamma = gamma * Math.PI/180.0;
             
-                var u, v, w;
+                    var u, v, w;
             
-                u = Math.cos(beta);
-                v = (Math.cos(alpha) - Math.cos(beta)*Math.cos(gamma))/Math.sin(gamma);
-                w = Math.sqrt(Math.max(0, 1-u*u-v*v));
+                    u = Math.cos(beta);
+                    v = (Math.cos(alpha) - Math.cos(beta)*Math.cos(gamma))/Math.sin(gamma);
+                    w = Math.sqrt(Math.max(0, 1-u*u-v*v));
             
-                var matrix = new $3Dmol.Matrix4(a, b*Math.cos(gamma), c*u, 0, 
-                                                0, b*Math.sin(gamma), c*v, 0,
-                                                0, 0,                 c*w, 0,
-                                                0, 0,                 0,   1); 
+                    var matrix = new $3Dmol.Matrix4(a, b*Math.cos(gamma), c*u, 0, 
+                                                    0, b*Math.sin(gamma), c*v, 0,
+                                                    0, 0,                 c*w, 0,
+                                                    0, 0,                 0,   1); 
+                }  
          
                 var points = [  new $3Dmol.Vector3(0, 0, 0),
                                 new $3Dmol.Vector3(1, 0, 0),
@@ -1744,6 +2758,8 @@ $3Dmol.GLViewer = (function() {
             }
             
             shapes.push(s);
+            s.finalize(); //finalize shape for memory efficiency, assume shape won't be extended
+            
             return s;
         };
 
@@ -1754,10 +2770,10 @@ $3Dmol.GLViewer = (function() {
             spec.end = spec.end || {};
             
             var p1 = new $3Dmol.Vector3(spec.start.x || 0,
-        			spec.start.y || 0, spec.start.z || 0)
-        	var p2 = new $3Dmol.Vector3(spec.end.x,
-        			spec.end.y || 0, spec.end.z || 0);
-        			
+                    spec.start.y || 0, spec.start.z || 0)
+            var p2 = new $3Dmol.Vector3(spec.end.x,
+                    spec.end.y || 0, spec.end.z || 0);
+                    
             var dir = new $3Dmol.Vector3();
             var dash = new $3Dmol.Vector3();
             var gap = new $3Dmol.Vector3();
@@ -1793,9 +2809,12 @@ $3Dmol.GLViewer = (function() {
                 p1 = temp.clone();   
                 drawn += gapAmt;
             }
-        			
-        	return s;
+            s.finalize(); //finalize shape for memory efficiency, assume shape won't be extended
+                    
+            return s;
         }
+
+        
 
         /**
          * Add custom shape component from user supplied function
@@ -1803,6 +2822,32 @@ $3Dmol.GLViewer = (function() {
          * @function $3Dmol.GLViewer#addCustom
          * @param {CustomSpec} spec - Style specification
          * @return {$3Dmol.GLShape}
+         @example
+         function triangle(viewer) {
+    var vertices = [];
+    var normals = [];
+    var colors = [];
+    var r = 20;
+    //triangle
+    vertices.push(new $3Dmol.Vector3(0,0,0));
+    vertices.push(new $3Dmol.Vector3(r,0,0));
+    vertices.push(new $3Dmol.Vector3(0,r,0));
+    
+    normals.push(new $3Dmol.Vector3(0,0,1));
+    normals.push(new $3Dmol.Vector3(0,0,1));
+    normals.push(new $3Dmol.Vector3(0,0,1));
+    
+    colors.push({r:1,g:0,b:0});
+    colors.push({r:0,g:1,b:0});
+    colors.push({r:0,g:0,b:1});
+
+    var faces = [ 0,1,2 ];
+    
+    var spec = {vertexArr:vertices, normalArr: normals, faceArr:faces,color:colors};
+    viewer.addCustom(spec);
+}
+            triangle(viewer);
+            viewer.render();
          */
         this.addCustom = function(spec) {
             spec = spec || {};
@@ -1810,6 +2855,7 @@ $3Dmol.GLViewer = (function() {
             s.shapePosition = shapes.length;
             s.addCustom(spec);
             shapes.push(s);
+            s.finalize(); //finalize shape for memory efficiency, assume shape won't be extended
 
             return s;
         };
@@ -1824,8 +2870,17 @@ $3Dmol.GLViewer = (function() {
          * @return {$3Dmol.GLShape}
          * 
          * @example
-         * viewer.addVolumetricData(data, "cube", {isoval: 0.01, color: "blue", opacity: 0.95});              
-         * viewer.addVolumetricData(data, "cube", {isoval: -0.01, color: "red", opacity: 0.95}); 
+
+    
+    $.get('data/bohr.cube', function(data) {
+      
+      viewer.addVolumetricData(data, "cube", {isoval: -0.01, color: "red", opacity: 0.95}); 
+      viewer.setStyle({cartoon:{},stick:{}});
+      viewer.zoomTo();
+      viewer.render();
+    });
+
+                
          */
         this.addVolumetricData = function(data, format, spec) {
             spec = spec || {};
@@ -1844,48 +2899,67 @@ $3Dmol.GLViewer = (function() {
          * @param {IsoSurfaceSpec} spec - Shape style specification
          * @return {$3Dmol.GLShape}
          * 
-         * @example
-         * var data = new $3Dmol.VolumeData(str,"cube");
-         * viewer.addIsosurface(data, {isoval: 0.01, color: "blue", opacity: 0.95});              
-         * viewer.addIsosurface(data, {isoval: -0.01, color: "red", opacity: 0.95}); 
+         @example 
+         $.get('../test_structs/benzene-homo.cube', function(data){
+                  var voldata = new $3Dmol.VolumeData(data, "cube");
+                  viewer.addIsosurface(voldata, {isoval: 0.01,
+                                                 color: "blue"});
+                  viewer.addIsosurface(voldata, {isoval: -0.01,
+                                                 color: "red"});
+                  viewer.zoomTo();
+                  viewer.render();
+                });
          */
-        this.addIsosurface = function(data,  spec) {
+        this.addIsosurface = function(data,  spec,callback) {
             spec = spec || {};
             var s = new $3Dmol.GLShape(spec);
             s.shapePosition = shapes.length;
-            s.addIsosurface(data, spec);
+            s.addIsosurface(data, spec, callback);
             shapes.push(s);
-
             return s;
         };
         
+        this.enableFog = function(fog){
+            if(fog){
+                scene.fog=new $3Dmol.Fog(bgColor, 100, 200);
+            }else{
+                config.disableFog=true;
+                show();
+            }
+
+        }
+
         /**
          * Sets the atomlists of all models in the viewer to specified frame
          * Sets to last frame if framenum out of range
          * 
          * @function $3Dmol.GLViewer#setFrame
-         * @param {number} framenum - each model in viewer has their atoms set to this index in frames list
+         * @param {number} framenum - fame index to use, starts at zero
+         * @return {Promise}
          */
-        this.setFrame = function(framenum) {
-            for (var i = 0; i < models.length; i++) {
-                models[i].setFrame(framenum);
-            }
-            return this;
-        };
+        this.setFrame = function (framenum) {
+            return new Promise(function (resolve, reject) {
+                var modelMap = models.map(function (model) {
+                    return model.setFrame(framenum);
+                });
+                Promise.all(modelMap)
+                    .then(function() {resolve()});
+            });
+        }
         
         /**
          * Returns the number of frames that the model with the most frames in the viewer has
          * 
-         * @function $3Dmol.GLViewer#getFrames
+         * @function $3Dmol.GLViewer#getNumFrames
          * @return {number}
          */
-        this.getFrames = function() {
+        this.getNumFrames = function() {
             var mostFrames = 0;
             var modelNum = 0;
             for (var i = 0; i < models.length; i++) {
-                if (models[i].getFrames().length > mostFrames) {
+                if (models[i].getNumFrames() > mostFrames) {
                     modelNum = i;
-                    mostFrames = models[i].getFrames().length;
+                    mostFrames = models[i].getNumFrames();
                 }
             }
             return mostFrames;
@@ -1896,14 +2970,12 @@ $3Dmol.GLViewer = (function() {
          * Animate all models in viewer from their respective frames
          * @function $3Dmol.GLViewer#animate
          * @param {Object} options - can specify interval (speed of animation), loop (direction
-         * of looping, 'backward', 'forward' or 'backAndForth') and reps (numer of repetitions, 0 indicates infinite loop)
+         * of looping, 'backward', 'forward' or 'backAndForth'), step interval between frames ('step'), and reps (numer of repetitions, 0 indicates infinite loop)
          *      
-         * @example
-         * viewer.addModelAsFrames(data, "pdb");
-         * viewer.animate({interval: 75, loop: "backward", reps: 30});
          */
+         
         this.animate = function(options) {
-            animated = true;
+            incAnim();
             var interval = 100;
             var loop = "forward";
             var reps = 0;
@@ -1917,32 +2989,55 @@ $3Dmol.GLViewer = (function() {
             if (options.reps) {
                 reps = options.reps;
             }
-            var mostFrames = this.getFrames();
+            var mostFrames = this.getNumFrames();
             var that = this;
             var currFrame = 0;
             var inc = 1;
+            if (options.step) {
+                inc = options.step;
+                reps /= inc;
+            }
             var displayCount = 0;
             var displayMax = mostFrames * reps;
-            var display = function(direction) {
-                if (direction == "forward") {
-                    that.setFrame(currFrame);
-                    currFrame = (currFrame + inc) % mostFrames;
-                }
-                else if (direction == "backward") {
-                    that.setFrame((mostFrames-1) - currFrame);
-                    currFrame = (currFrame + inc) % mostFrames;
-                }
-                else { //back and forth
-                    that.setFrame(currFrame);
-                    currFrame += inc;
-                    inc *= (((currFrame % (mostFrames-1)) == 0) ? -1 : 1);
-                }
+            var time = new Date();
+            var resolve = function() {
                 that.render();
                 if (++displayCount == displayMax || !that.isAnimated()) {
-                    clearInterval(intervalID);
+                    clearTimeout(intervalID);
+                    decAnim(); 
+                }
+                else {
+                    var newInterval = interval - (new Date() - time);
+                    newInterval = (newInterval>0)?newInterval:0;
+                    setTimeout(display, newInterval, loop);
+                }
+            }
+            var display = function(direction) {
+                time = new Date();
+                if (direction == "forward") {
+                    that.setFrame(currFrame)
+                    .then(function () {
+                        currFrame = (currFrame + inc) % mostFrames;
+                        resolve();
+                    });
+                }
+                else if (direction == "backward") {
+                    that.setFrame((mostFrames-1) - currFrame)
+                    .then(function () {
+                        currFrame = (currFrame + inc) % mostFrames;
+                        resolve();
+                    });
+                }
+                else { //back and forth
+                    that.setFrame(currFrame)
+                    .then(function () {
+                        currFrame += inc;
+                        inc *= (((currFrame % (mostFrames-1)) == 0) ? -1 : 1);
+                        resolve();
+                    });          
                 }
             };
-            var intervalID = setInterval( function() { display(loop); }, interval);
+            var intervalID = setTimeout(display, 0, loop);
             return this;
         };
         
@@ -1951,7 +3046,7 @@ $3Dmol.GLViewer = (function() {
          * @function $3Dmol.GLViewer#stopAnimate
          */
         this.stopAnimate = function() {
-            animated = false;
+            animated = 0;
             return this;
         };
         
@@ -1961,21 +3056,38 @@ $3Dmol.GLViewer = (function() {
          * @return {boolean}
          */
         this.isAnimated = function() {
-            return animated;
+            return animated > 0;
         };
         
 
         /**
          * Create and add model to viewer, given molecular data and its format 
-         * (pdb, sdf, xyz, or mol2)
          * 
          * @function $3Dmol.GLViewer#addModel
          * @param {string} data - Input data
-         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', 'txyz', or 'mol2')
-         * @return {$3Dmol.GLModel}
+         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', 'pqr', or 'mol2')
+         * @param {ParserOptionsSpec} options - format dependent options. Attributes depend on the input file format.
+         * @example
+         
+
+              viewer.setViewStyle({style:"outline"});
+              $.get('data/1fas.pqr', function(data){
+                  viewer.addModel(data, "pqr");
+                  $.get("data/1fas.cube",function(volumedata){
+                      viewer.addSurface($3Dmol.SurfaceType.VDW, {opacity:0.85,voldata: new $3Dmol.VolumeData(volumedata, "cube"), volscheme: new $3Dmol.Gradient.RWB(-10,10)},{});
+                      
+                  viewer.render();
+                  });
+                  viewer.zoomTo();
+              });
+         *
+         * @return {$3Dmol.GLModel} 
          */
-        this.addModel = function(data, format, options) {
-            var m = new $3Dmol.GLModel(models.length, defaultcolors);
+        this.addModel =  function(data, format, options) {
+            if(options && !options.defaultcolors) {
+                options.defaultcolors = defaultcolors;
+            }
+            var m = new $3Dmol.GLModel(models.length, options);
             m.addMolData(data, format, options);
             models.push(m);
 
@@ -1988,7 +3100,7 @@ $3Dmol.GLViewer = (function() {
          * 
          * @function $3Dmol.GLViewer#addModels
          * @param {string} data - Input data
-         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', 'txyz', or 'mol2')
+         * @param {string} format - Input format (see {@link FileFormats})
          * @return {Array<$3Dmol.GLModel>}
          */
         this.addModels = function(data, format, options) {
@@ -2003,7 +3115,8 @@ $3Dmol.GLViewer = (function() {
                 newModel.setAtomDefaults(modelatoms[i]);
                 newModel.addFrame(modelatoms[i]);
                 newModel.setFrame(0);
-                newModel.setModelData(modelatoms.modelData[i]);
+                if(modelatoms.modelData)
+                    newModel.setModelData(modelatoms.modelData[i]);
                 newModel.setDontDuplicateAtoms(!options.duplicateAssemblyAtoms);
                 models.push(newModel);
             }
@@ -2018,8 +3131,17 @@ $3Dmol.GLViewer = (function() {
          * 
          * @function $3Dmol.GLViewer#addModelsAsFrames
          * @param {string} data - Input data
-         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', 'txyz', or 'mol2')
+         * @param {string} format - Input format (see {@link FileFormats})
          * @return {$3Dmol.GLModel}
+         * 
+         * @example
+                $.get('../test_structs/multiple2.xyz', function(data){
+                  viewer.addModelsAsFrames(data, "xyz");
+                  viewer.animate({loop: "forward",reps: 1});
+                  viewer.setStyle({stick:{colorscheme:'magentaCarbon'}});
+                  viewer.zoomTo();
+                  viewer.render();
+              });
          */
         this.addModelsAsFrames = function(data, format, options) {
             options = options || {};
@@ -2038,8 +3160,16 @@ $3Dmol.GLViewer = (function() {
          * 
          * @function $3Dmol.GLViewer#addAsOneMolecule
          * @param {string} data - Input data
-         * @param {string} format - Input format ('pdb', 'sdf', 'xyz', 'txyz', or 'mol2')
+         * @param {string} format - Input format (see {@link FileFormats})
          * @return {$3Dmol.GLModel}
+         @example
+          
+
+              $.get('../test_structs/multiple.sdf', function(data){
+                  viewer.addAsOneMolecule(data, "sdf");
+                  viewer.zoomTo();
+                  viewer.render();
+              });
          */
         this.addAsOneMolecule = function(data, format, options) {
             options = options || {};
@@ -2127,26 +3257,12 @@ $3Dmol.GLViewer = (function() {
             return m;
         };
 
-        function applyToModels(func, sel, value1, value2) {
+        function applyToModels(func, sel, value1, value2, value3) {
             
             //apply func to all models that are selected by sel with value1 and 2
-            var ms = []
-            if (typeof sel.model === "undefined") {
-                for (i = 0; i < models.length; i++) {
-                    if (models[i])
-                        ms.push(models[i]);
-                }
-            } else { // specific to some models
-                ms = sel.model;
-                if (!$.isArray(ms))
-                    ms = [ ms ];
-            }
-            
-            
+            var ms = getModelList(sel);
             for (var i = 0; i < ms.length; i++) {
-                if (ms[i]) {
-                    ms[i][func](sel, value1, value2);
-                }
+                ms[i][func](sel, value1, value2, value3);
             }
         }
 
@@ -2158,8 +3274,18 @@ $3Dmol.GLViewer = (function() {
          * @param {AtomStyleSpec} style - Style spec to apply to specified atoms
          * 
          * @example
-         * viewer.setStyle({}, {stick:{}}); //set all atoms to stick
-         * viewer.setStyle({chain: 'B'}, {cartoon: {color: 'spectrum'}}); //set chain B to rainbow cartoon
+         viewer.setBackgroundColor(0xffffffff);
+       $3Dmol.download('pdb:5IRE',viewer,{doAssembly: false},function(m) {
+        m.setStyle({chain:'A'},{'cartoon':{color:'spectrum'}});
+        m.setStyle({chain:'C'},{'cartoon':{style:'trace',color:'blue'}});
+        m.setStyle({chain:'E'},{'cartoon':{tubes:true,arrows:true,color:'green',opacity:0.75}});
+        m.setStyle({chain:'B'},{'cartoon':{color:'red',opacity:0.5}});
+        m.setStyle({chain:'D'},{'cartoon':{style:'trace',color:'grey',opacity:0.75}});
+        m.setStyle({chain:'F'},{'cartoon':{arrows:true,color:'white'}});
+       // viewer.addStyle({chain:'B'},{line:{}});
+       viewer.zoomTo();
+       viewer.render();
+    });
          */
         this.setStyle = function(sel, style) {
             if(typeof(style) === 'undefined') {
@@ -2178,6 +3304,15 @@ $3Dmol.GLViewer = (function() {
          * @function $3Dmol.GLViewer#addStyle
          * @param {AtomSelectionSpec} sel - Atom selection specification
          * @param {AtomStyleSpec} style - style spec to add to specified atoms
+         @example
+         
+       $3Dmol.download('pdb:5IRE',viewer,{doAssembly: false},function(m) {
+       viewer.setStyle({cartoon:{}});
+       //keep cartoon style, but show thick sticks for chain A
+       viewer.addStyle({chain:'A'},{stick:{radius:.5,colorscheme:"magentaCarbon"}});
+       viewer.zoomTo();
+       viewer.render();
+       });
          */
         this.addStyle = function(sel, style) {
             if(typeof(style) === 'undefined') {
@@ -2189,31 +3324,81 @@ $3Dmol.GLViewer = (function() {
             return this;
         };
 
+
         /**
-         * Set click-handling properties to all selected atoms
+         * Set click-handling properties to all selected atomsthis.
          * 
          * @function $3Dmol.GLViewer#setClickable
          * @param {AtomSelectionSpec} sel - atom selection to apply clickable settings to
          * @param {boolean} clickable - whether click-handling is enabled for the selection
          * @param {function} callback - function called when an atom in the selection is clicked
          * 
-         * @example
-         * viewer.setClickable({}, false); // disable click-handling for entire viewer
-         * viewer.setClickable({chain: 'B'}, true, function(){ console.log(this.elem); }); // chain B prints the clicked element to console
+         * @example       
+            $3Dmol.download("cid:307900",viewer,{},function(){
+                              
+                   viewer.setStyle({},{sphere:{}});                
+                   viewer.setClickable({},true,function(atom,viewer,event,container) {
+                       viewer.addLabel(atom.resn+":"+atom.atom,{position: atom, backgroundColor: 'darkgreen', backgroundOpacity: 0.8});
+                   });
+                   viewer.render();
+        });
          */
         this.setClickable = function(sel, clickable, callback) {
             applyToModels("setClickable", sel, clickable, callback);
             return this;
         };
+        /** Set hoverable and callback of selected atoms
+         * 
+         * @function $3Dmol.GLViewer#setHoverable
+         * @param {AtomSelectionSpec} sel - atom selection to apply hoverable settings to
+         * @param {boolean} hoverable - whether hover-handling is enabled for the selection
+         * @param {function} hover_callback - function called when an atom in the selection is hovered over
+         * @param {function} unhover_callback - function called when the mouse moves out of the hover area  
+        @example             
+        $3Dmol.download("pdb:1ubq",viewer,{},function(){
+                          
+               viewer.setHoverable({},true,function(atom,viewer,event,container) {
+                   if(!atom.label) {
+                    atom.label = viewer.addLabel(atom.resn+":"+atom.atom,{position: atom, backgroundColor: 'mintcream', fontColor:'black'});
+                   }
+               },
+               function(atom) { 
+                   if(atom.label) {
+                    viewer.removeLabel(atom.label);
+                    delete atom.label;
+                   }
+                }
+               );
+               viewer.setStyle({},{stick:{}});               
+               viewer.render();
+        });
 
+         */
+        this.setHoverable = function(sel,hoverable,hover_callback,unhover_callback){
+            applyToModels("setHoverable", sel,hoverable, hover_callback,unhover_callback);
+            return this;
+        }
+        
+        /**
+         * If  atoms have dx, dy, dz properties (in some xyz files), vibrate populates each model's frame property based on parameters.
+         * Models can then be animated
+         * 
+         * @function $3Dmol.GLViewer#vibrate
+         * @param {number} numFrames - number of frames to be created, default to 10
+         * @param {number} amplitude - amplitude of distortion, default to 1 (full)
+         */
+        this.vibrate = function(numFrames, amplitude) {
+            applyToModels("vibrate", numFrames, amplitude);
+            return this;
+        }
         /**
          * @function $3Dmol.GLViewer#setColorByProperty
          * @param {AtomSelectionSpec} sel
          * @param {type} prop
          * @param {type} scheme
          */
-        this.setColorByProperty = function(sel, prop, scheme) {
-            applyToModels("setColorByProperty", sel, prop, scheme);
+        this.setColorByProperty = function(sel, prop, scheme, range) {
+            applyToModels("setColorByProperty", sel, prop, scheme, range);
             return this;
         };
 
@@ -2248,7 +3433,7 @@ $3Dmol.GLViewer = (function() {
                     continue;
                 if (atom.z < extent[0][2] || atom.z > extent[1][2])
                     continue;
-                ret.push(i);
+                ret.push(atom);
             }
             return ret;
         };
@@ -2277,6 +3462,20 @@ $3Dmol.GLViewer = (function() {
         var carveUpExtent = function(extent, atomlist, atomstoshow) {
             var ret = [];
 
+            var index2atomlist = {}; //map from atom.index to position in atomlist
+            for(var i = 0, n = atomlist.length; i < n; i++) {
+                index2atomlist[atomlist[i].index] = i;
+            }
+            
+            var atomsToListIndex = function(atoms) {
+            //return a list of indices into atomlist
+                var ret = [];
+                for(var i = 0, n = atoms.length; i < n; i++) {
+                    if(atoms[i].index in index2atomlist)
+                        ret.push(index2atomlist[atoms[i].index])
+                }
+                return ret;
+            }
             var copyExtent = function(extent) {
                 // copy just the dimensions
                 var ret = [];
@@ -2338,8 +3537,8 @@ $3Dmol.GLViewer = (function() {
                 // ultimately, divide up by atom for best meshing
                 ret.push({
                     extent : splits[i],
-                    atoms : atoms,
-                    toshow : toshow
+                    atoms : atomsToListIndex(atoms),
+                    toshow : atomsToListIndex(toshow)
                 });
             }
 
@@ -2502,7 +3701,7 @@ $3Dmol.GLViewer = (function() {
 
             ps.buildboundary();
 
-            if (type == $3Dmol.SurfaceType.SES) {
+            if (type == $3Dmol.SurfaceType.SES || type == $3Dmol.SurfaceType.MS) {
                 ps.fastdistancemap();
                 ps.boundingatom(false);
                 ps.fillvoxelswaals(atoms, extendedAtoms);
@@ -2548,7 +3747,7 @@ $3Dmol.GLViewer = (function() {
         
         /**
          * Adds an explicit mesh as a surface object.
-         * 
+         * @function $3Dmol.GLViewer#addMesh
          * @param {$3Dmol.Mesh}
          *            mesh
          * @param {Object}
@@ -2577,18 +3776,26 @@ $3Dmol.GLViewer = (function() {
             });
             return ret;
         }
+
+        var surfaceTypeMap={
+            "VDW":$3Dmol.SurfaceType.VDW,
+            "MS":$3Dmol.SurfaceType.MS,
+            "SAS":$3Dmol.SurfaceType.SAS,
+            "SES":$3Dmol.SurfaceType.SES
+        }
+
         /**
          * Add surface representation to atoms
-         *  @function $3Dmol.GLViewer#addSurface
-         * @param {$3Dmol.SurfaceType} type - Surface type
+         * @function $3Dmol.GLViewer#addSurface
+         * @param {$3Dmol.SurfaceType|string} type - Surface type (VDW, MS, SAS, or SES)
          * @param {SurfaceStyleSpec} style - optional style specification for surface material (e.g. for different coloring scheme, etc)
          * @param {AtomSelectionSpec} atomsel - Show surface for atoms in this selection
          * @param {AtomSelectionSpec} allsel - Use atoms in this selection to calculate surface; may be larger group than 'atomsel' 
          * @param {AtomSelectionSpec} focus - Optionally begin rendering surface specified atoms
-         * 
-         * @return {number} surfid - Identifying number for this surface
+         * @param {function} surfacecallback - function to be called after setting the surface
+         * @return {Promise} promise - Returns a promise that ultimately resovles to the surfid.  Returns surfid immediately if surfacecallback is specified.  Returned promise has a surfid field for immediate access.
          */
-        this.addSurface = function(type, style, atomsel, allsel, focus) {
+        this.addSurface = function(type, style, atomsel, allsel, focus, surfacecallback) {
             // type 1: VDW 3: SAS 4: MS 2: SES
             // if sync is true, does all work in main thread, otherwise uses
             // workers
@@ -2599,6 +3806,19 @@ $3Dmol.GLViewer = (function() {
             // surfaces
             // of atomsToShow are displayed (e.g., for showing cavities)
             // if focusSele is specified, will start rending surface around the
+            
+            //surfacecallback gets called when done
+            var surfid = nextSurfID();
+            if(typeof type =="string"){
+                if(surfaceTypeMap[type]!== undefined)
+                    type = surfaceTypeMap[type];
+                else{
+                    console.log("Surface type : " + type + " is not recognized");
+                } 
+            }
+            else if(type===undefined){
+                type = $3Dmol.SurfaceType.VDW; //default
+            }
             // atoms specified by this selection
             var atomlist = null, focusSele = null;
             //TODO: currently generating a shallow copy to avoid problems when atoms are chagned
@@ -2624,7 +3844,7 @@ $3Dmol.GLViewer = (function() {
             }
 
             var addSurfaceHelper = function addSurfaceHelper(surfobj, atomlist, atomsToShow) {
-            
+                //function returns promise with surfid resolved
                 if(!focus) {
                     focusSele = atomsToShow;
                 } else {
@@ -2634,7 +3854,6 @@ $3Dmol.GLViewer = (function() {
                 var atom;
                 var time = new Date();
                 var extent = $3Dmol.getExtent(atomsToShow, true);
-
                 var i, il;
                 if (style['map'] && style['map']['prop']) {
                     // map color space using already set atom properties
@@ -2707,30 +3926,40 @@ $3Dmol.GLViewer = (function() {
 
                     // to keep the browser from locking up, call through setTimeout
                     var callSyncHelper = function callSyncHelper(i) {
-                        if (i >= extents.length)
-                            return;
-
-                        var VandF = generateMeshSyncHelper(type, extents[i].extent,
-                                extents[i].atoms, extents[i].toshow, reducedAtoms,
-                                totalVol);
-                        var mesh = generateSurfaceMesh(atomlist, VandF, mat);
-                        $3Dmol.mergeGeos(surfobj.geo, mesh);
-                        _viewer.render();
-
-                        setTimeout(callSyncHelper, 1, i + 1);
+                        return new Promise(function(resolve, reject) { 
+                            var VandF = generateMeshSyncHelper(type, extents[i].extent,
+                                    extents[i].atoms, extents[i].toshow, reducedAtoms,
+                                    totalVol);
+                            //complicated surfaces sometimes have > 2^16 vertices
+                            var VandFs = $3Dmol.splitMesh({vertexArr:VandF.vertices, faceArr:VandF.faces});
+                            for(var vi=0,vl=VandFs.length;vi<vl;vi++){
+                                var VandF={vertices:VandFs[vi].vertexArr,
+                                        faces:VandFs[vi].faceArr};                            
+                                var mesh = generateSurfaceMesh(atomlist, VandF, mat);
+                                $3Dmol.mergeGeos(surfobj.geo, mesh);
+                            }
+                            _viewer.render();
+                            resolve();
+                        })
                     }
-
-                    setTimeout(callSyncHelper, 1, 0);
+                    var promises = [];
+                    for (var i = 0; i < extents.length; i++) {
+                        promises.push(callSyncHelper(i));
+                    }
+                    return Promise.all(promises)
+                    .then(function() {
+                        surfobj.done = true;
+                        return Promise.resolve(surfid);
+                    });
 
                     // TODO: Asynchronously generate geometryGroups (not separate
                     // meshes) and merge them into a single geometry
                 } else { // use worker
 
-                    var workers = [];
+                   var workers = [];
                     if (type < 0)
                         type = 0; // negative reserved for atom data
-                    for (i = 0, il = numWorkers; i < il; i++) {
-                        // var w = new Worker('3Dmol/SurfaceWorker.js');
+                    for (var i = 0, il = numWorkers; i < il; i++) {
                         var w = new Worker($3Dmol.SurfaceWorker);
                         workers.push(w);
                         w.postMessage({
@@ -2739,53 +3968,56 @@ $3Dmol.GLViewer = (function() {
                             'volume' : totalVol
                         });
                     }
-                    var cnt = 0;
+                    
+                    return new Promise(function(resolve,reject) {
+                        var cnt = 0;
 
-                    var rfunction = function(event) {
-                        var VandFs = $3Dmol.splitMesh({vertexArr:event.data.vertices,
-							                           faceArr:event.data.faces});
-					    for(var i=0,vl=VandFs.length;i<vl;i++){
-                            var VandF={vertices:VandFs[i].vertexArr,
-								       faces:VandFs[i].faceArr};
-                            var mesh = generateSurfaceMesh(atomlist, VandF, mat);
-                            $3Dmol.mergeGeos(surfobj.geo, mesh);
+                        var rfunction = function(event) {
+                            var VandFs = $3Dmol.splitMesh({vertexArr:event.data.vertices,
+                                                           faceArr:event.data.faces});
+                            for(var i=0,vl=VandFs.length;i<vl;i++){
+                                var VandF={vertices:VandFs[i].vertexArr,
+                                           faces:VandFs[i].faceArr};
+                                var mesh = generateSurfaceMesh(atomlist, VandF, mat);
+                                $3Dmol.mergeGeos(surfobj.geo, mesh);
+                            }
                             _viewer.render();
-						}
 
-                    //    console.log("async mesh generation " + (+new Date() - time) + "ms");
-                        cnt++;
-                        if (cnt == extents.length)
-                            surfobj.done = true;
-                    };
+                        //    console.log("async mesh generation " + (+new Date() - time) + "ms");
+                            cnt++;
+                            if (cnt == extents.length) {
+                                surfobj.done = true;
+                                resolve(surfid); //caller of helper will resolve callback if present
+                            }
+                        };
 
-                    var efunction = function(event) {
-                        console.log(event.message + " (" + event.filename + ":" + event.lineno + ")");
-                    };
+                        var efunction = function(event) {
+                            console.log(event.message + " (" + event.filename + ":" + event.lineno + ")");
+                            reject(event);
+                        };
 
-                    for (i = 0; i < extents.length; i++) {
-                        var worker = workers[i % workers.length];
-                        worker.onmessage = rfunction;
+                        for (i = 0; i < extents.length; i++) {
+                            var worker = workers[i % workers.length];
+                            worker.onmessage = rfunction;
 
-                        worker.onerror = efunction;
+                            worker.onerror = efunction;
 
-                        worker.postMessage({
-                            'type' : type,
-                            'expandedExtent' : extents[i].extent,
-                            'extendedAtoms' : extents[i].atoms,
-                            'atomsToShow' : extents[i].toshow
-                        });
-                    }
+                            worker.postMessage({
+                                'type' : type,
+                                'expandedExtent' : extents[i].extent,
+                                'extendedAtoms' : extents[i].atoms,
+                                'atomsToShow' : extents[i].toshow
+                            });
+                        }
+                    });
                 }
-
-                // NOTE: This is misleading if 'async' mesh generation - returns
-                // immediately
-                //console.log("full mesh generation " + (+new Date() - time) + "ms");
+                
             }
             
             style = style || {};
             var mat = getMatWithStyle(style);
             var surfobj = [];
-            
+            var promise = null;
             if (symmetries) { //do preprocessing
                 var modelsAtomList = {};
                 var modelsAtomsToShow = {};
@@ -2799,17 +4031,21 @@ $3Dmol.GLViewer = (function() {
                 for (n = 0; n < atomsToShow.length; n++) {
                     modelsAtomsToShow[atomsToShow[n].model].push(atomsToShow[n]);
                 }
+                var promises = [];
                 for (n = 0; n < models.length; n++) {
-                    surfobj.push({
-                        geo : new $3Dmol.Geometry(true),
-                        mat : mat,
-                        done : false,
-                        finished : false,
-                        symmetries : models[n].getSymmetries()
-                    // also webgl initialized
-                    });
-                    addSurfaceHelper(surfobj[n], modelsAtomList[n], modelsAtomsToShow[n]);
+                    if(modelsAtomsToShow[n].length > 0) {
+                        surfobj.push({
+                            geo : new $3Dmol.Geometry(true),
+                            mat : mat,
+                            done : false,
+                            finished : false,
+                            symmetries : models[n].getSymmetries()
+                        // also webgl initialized
+                        });
+                        promises.append(addSurfaceHelper(surfobj[n], modelsAtomList[n], modelsAtomsToShow[n]))
+                    }
                 }
+                promise = Promise.all(promises);
             }
             else {
                 surfobj.push({
@@ -2819,27 +4055,48 @@ $3Dmol.GLViewer = (function() {
                     finished : false,
                     symmetries : [new $3Dmol.Matrix4()]
                 });
-                addSurfaceHelper(surfobj[surfobj.length-1], atomlist, atomsToShow);
-            } 
-            var surfid = nextSurfID();
+                promise = addSurfaceHelper(surfobj[surfobj.length-1], atomlist, atomsToShow)
+            }
             surfaces[surfid] = surfobj;
-            
-            return surfid;
-
+            promise.surfid = surfid;
+            if(surfacecallback && typeof(surfacecallback) == "function") {
+                promise.then(function(surfid) {
+                    surfacecallback(surfid);
+                });
+                return surfid;
+            }
+            else return promise;
         };
 
         /**
          * Set the surface material to something else, must render change
-         * 
+        *  @function $3Dmol.GLViewer#setSurfaceMaterialStyle
          * @param {number} surf - Surface ID to apply changes to
-         * @param {matSpec} style - new material style specification
+         * @param {SurfaceStyleSpec} style - new material style specification
          */ 
         this.setSurfaceMaterialStyle = function(surf, style) {
             if (surfaces[surf]) {
-                surfArr = surfaces[surf];
+                var surfArr = surfaces[surf];
                 for (var i = 0; i < surfArr.length; i++) {
-                    surfArr[i].mat = getMatWithStyle(style);
+                    var mat = surfArr[i].mat = getMatWithStyle(style);
                     surfArr[i].mat.side = $3Dmol.FrontSide;
+                    if(style.color) {
+                        surfArr[i].mat.color = style.color;
+                        surfArr[i].geo.colorsNeedUpdate = true;
+                        var c = $3Dmol.CC.color(style.color);
+                        surfArr[i].geo.setColors(function() { return c;});
+                    }
+                    else if(mat.voldata && mat.volscheme) {
+                        //convert volumetric data into colors
+                        var scheme = mat.volscheme;
+                        var voldata = mat.voldata;
+                        var range = scheme.range() || [-1,1];
+                        surfArr[i].geo.setColors(function(x,y,z) {
+                            var val = voldata.getVal(x,y,z);
+                            var col =  $3Dmol.CC.color(scheme.valueToHex(val, range));
+                            return col;
+                        });
+                    }
                     surfArr[i].finished = false; // trigger redraw
                 }
             }
@@ -2848,7 +4105,7 @@ $3Dmol.GLViewer = (function() {
 
         /**
          * Remove surface with given ID
-         * 
+         * @function $3Dmol.GLViewer#removeSurface
          * @param {number} surf - surface id
          */
         this.removeSurface = function(surf) {
@@ -2870,7 +4127,7 @@ $3Dmol.GLViewer = (function() {
         /** Remove all surfaces.
          * @function $3Dmol.GLViewer#removeAllSurfaces */
         this.removeAllSurfaces = function() {
-            for (n in  surfaces) {
+            for (var n in  surfaces) {
                 if(!surfaces.hasOwnProperty(n)) continue;
                 var surfArr = surfaces[n];
                 for(var i = 0; i < surfArr.length; i++) {
@@ -2926,7 +4183,7 @@ $3Dmol.GLViewer = (function() {
          * Add specified properties to all atoms matching input argument
          * @function $3Dmol.GLViewer#mapAtomProperties
          * @param {Object} props, either array of atom selectors with associated props, or function that takes atom and sets its properties
-         * @param {AtomSelectionSpec} sel
+         * @param {AtomSelectionSpec} sel  - subset of atoms to work on - model selection must be specified here
          */
         this.mapAtomProperties = function(props, sel) {
             sel = sel || {};
@@ -2961,12 +4218,13 @@ $3Dmol.GLViewer = (function() {
             return this;
         };
 
+
         /**
-         * @function $3Dmol.GLViewer#linkViewer
          * Synchronize this view matrix of this viewer to the passed viewer.
          * When the viewpoint of this viewer changes, the other viewer will
          * be set to this viewer's view.
          * @function $3Dmol.GLViewer#linkViewer
+         * @param {$3Dmol.GLViewer} otherview 
          */
         this.linkViewer = function(otherviewer) {
            linkedViewers.push(otherviewer);
@@ -2981,6 +4239,40 @@ $3Dmol.GLViewer = (function() {
             // errors in callback shouldn't invalidate the viewer
             console.log("error with glviewer callback: " + e);
         }
+
+        /**
+         * Return the z distance between the model and the camera
+         * @function $3Dmol.GLViewer#getPerceivedDistance
+         * @return {number} distance
+         */
+        this.getPerceivedDistance = function() {
+            return CAMERA_Z - rotationGroup.position.z;
+        }
+
+        /**
+         * Set the distance between the model and the camera
+         * Essentially zooming. Useful while stereo rendering.
+         * @function $3Dmol.GLViewer#setPerceivedDistance
+         */
+        this.setPerceivedDistance = function(dist) {
+            rotationGroup.position.z = CAMERA_Z - dist;
+        }
+
+        /**
+         * Used for setting an approx value of eyeSeparation. Created for calling by StereoViewer object
+         * @function $3Dmol.GLViewer#setAutoEyeSeparation
+         * @return {number} camera x position
+         */
+        this.setAutoEyeSeparation = function(isright) {
+            var dist = this.getPerceivedDistance();
+            if (isright || camera.position.x > 0) //setting a value of dist*tan(5)
+                camera.position.x = dist*Math.tan(Math.PI / 180.0 * 5.0) 
+            else
+                camera.position.x = -dist*Math.tan(Math.PI / 180.0 * 5.0)
+            camera.lookAt(new $3Dmol.Vector3(0,0,rotationGroup.position.z));
+            return camera.position.x
+        }
+
     }
 
     return GLViewer;
@@ -2988,3 +4280,4 @@ $3Dmol.GLViewer = (function() {
 })();
 
 $3Dmol['glmolViewer'] = $3Dmol.GLViewer;
+

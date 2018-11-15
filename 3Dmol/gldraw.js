@@ -2,6 +2,19 @@
 
 var $3Dmol = $3Dmol || {};
 
+//define enum values
+/**
+ * Enum for cylinder cap styles.
+ * @readonly
+ * @enum {number} $3Dmol.CAP
+ */
+$3Dmol.CAP = {
+    NONE : 0,
+    FLAT : 1,
+    ROUND : 2
+};
+
+
 /**
  * Lower level utilities for creating WebGL shape geometries.
  * These are not intended for general consumption.
@@ -17,7 +30,7 @@ $3Dmol.GLDraw = (function() {
     var getRotationMatrix = function() {
 
         var d = new $3Dmol.Vector3();
-        // var rot = new Float32Array(9);
+        // var rot = new (9);
 
         return function(dir) {
 
@@ -126,17 +139,18 @@ $3Dmol.GLDraw = (function() {
     var cylVertexCache = {
 
         // memoize both rounded and flat caps (hemisphere and circle)
-        cache : {false:{}, true:{}},
+        cache :{} ,
 
-        getVerticesForRadius : function(radius, flat) {
-
-            if (this.cache[flat][radius] !== undefined)
-                return this.cache[flat][radius];
+        getVerticesForRadius : function(radius, cap, capType) {
+            if(typeof(this.chache) !== undefined && this.cache[radius] !== undefined)
+                if(this.cache[radius][cap+capType] !== undefined)                                                      
+                    return this.cache[radius][cap+capType];
 
             var dir = new $3Dmol.Vector3(0, 1, 0);
             var w = basisVectors.length;
             var nvecs = [], norms = [];
             var n;
+
 
             for (var i = 0; i < w; i++) {
                 // bottom
@@ -208,7 +222,11 @@ $3Dmol.GLDraw = (function() {
                             vertex.x = -radius
                                     * Math.cos(phiStart + u * phiLength)
                                     * Math.sin(thetaStart + v * thetaLength);
-                            vertex.y = flat ? 0 : radius * Math.cos(thetaStart + v * thetaLength);
+                            if(cap==1)
+                                vertex.y=0;
+                            else
+                                vertex.y=radius * Math.cos(thetaStart + v * thetaLength);
+
                             vertex.z = radius
                                     * Math.sin(phiStart + u * phiLength)
                                     * Math.sin(thetaStart + v * thetaLength);
@@ -220,7 +238,7 @@ $3Dmol.GLDraw = (function() {
                             if (Math.abs(vertex.z) < 1e-5)
                                 vertex.z = 0;
 
-                            if (flat) {
+                            if (cap == $3Dmol.CAP.FLAT) {
                                 n = new $3Dmol.Vector3(0, Math.cos(thetaStart + v * thetaLength), 0);
                                 n.normalize();
                             }
@@ -263,13 +281,15 @@ $3Dmol.GLDraw = (function() {
                 w : widthSegments,
                 h : heightSegments
             };
-
-            this.cache[flat][radius] = obj;
+            
+            if(!(radius in this.cache)) this.cache[radius]={};
+            this.cache[radius][cap+capType] = obj;
 
             return obj;
 
         }
     };
+    
 
     // creates a cylinder
     var drawnC = 0;
@@ -286,8 +306,8 @@ $3Dmol.GLDraw = (function() {
      *            radius
      * @param {$3Dmol.Color}
      *            color
-     * @param {integer} fromCap - 0 for none, 1 for flat, 2 for round; Note: currently do not support different styles of caps on the same cylinder.
-     * @param {integer} toCap = 0 for none, 1 for flat, 2 for round
+     * @param {$3Dmol.CAP} fromCap - 0 for none, 1 for flat, 2 for round
+     * @param {$3Dmol.CAP} toCap = 0 for none, 1 for flat, 2 for round
      *            
      * */
     draw.drawCylinder = function(geo, from, to, radius, color, fromCap, toCap) {
@@ -295,12 +315,7 @@ $3Dmol.GLDraw = (function() {
             return;
         drawnC++;
         // vertices
-        var drawcaps = fromCap || toCap;
-
-        var flat = false;
-        if (fromCap == 1 && toCap == 1) // 0 is none, 1 is flat, 2 is round
-          	flat = true;
-
+        var drawcaps = toCap || fromCap;
         color = color || {r:0, g:0, b:0};
 
         /** @type {Array.<number>} */
@@ -312,8 +327,8 @@ $3Dmol.GLDraw = (function() {
         var e = getRotationMatrix(dir);
         // get orthonormal vectors from cache
         // TODO: Will have orient with model view matrix according to direction
-        var vobj = cylVertexCache.getVerticesForRadius(radius, flat);
 
+        var vobj = cylVertexCache.getVerticesForRadius(radius, toCap, "to");
         // w (n) corresponds to the number of orthonormal vectors for cylinder
         // (default 16)
         var n = vobj.w, h = vobj.h;
@@ -390,13 +405,11 @@ $3Dmol.GLDraw = (function() {
         }
 
         // SPHERE CAPS
-
         if (drawcaps) {
-
             // h - sphere rows, verticesRows.length - 2
+            
             var ystart = (toCap) ? 0 : h / 2;
             var yend = (fromCap) ? h + 1 : h / 2 + 1;
-
             var v1, v2, v3, v4, x1, x2, x3, x4, y1, y2, y3, y4, z1, z2, z3, z4, nx1, nx2, nx3, nx4, ny1, ny2, ny3, ny4, nz1, nz2, nz3, nz4, v1offset, v2offset, v3offset, v4offset;
 
             for (y = ystart; y < yend; y++) {
@@ -405,7 +418,13 @@ $3Dmol.GLDraw = (function() {
                 // n number of points for each level (verticesRows[i].length -
                 // 1)
                 var cap = (y <= h / 2) ? to : from;
-
+                var toObj = cylVertexCache.getVerticesForRadius(radius, toCap, "to");
+                var fromObj = cylVertexCache.getVerticesForRadius(radius, fromCap, "from");
+                if(cap===to){
+                    vertices = toObj.vertices, normals = toObj.normals, verticesRows = toObj.verticesRows;
+                }else if(cap==from){
+                    vertices = fromObj.vertices, normals = fromObj.normals, verticesRows = fromObj.verticesRows;
+                }
                 for (x = 0; x < n; x++) {
 
                     faceoffset = geoGroup.faceidx;
@@ -497,7 +516,8 @@ $3Dmol.GLDraw = (function() {
                     nz4 = e[5] * normals[v4].y + e[8] * normals[v4].z;
 
                     // if (Math.abs(vobj.sphereVertices[v1].y) === radius) {
-                    if (y === 0) {
+
+                    if (y === 0) {//to center circle
                         // face = [v1, v3, v4];
                         // norm = [n1, n3, n4];
 
@@ -521,7 +541,7 @@ $3Dmol.GLDraw = (function() {
 
                     // else if (Math.abs(vobj.sphereVertices[v3].y) === radius)
                     // {
-                    else if (y === yend - 1) {
+                    else if (y === yend - 1) {//from end center circle
                         // face = [v1, v2, v3];
                         // norm = [n1, n2, n3];
 
@@ -543,7 +563,7 @@ $3Dmol.GLDraw = (function() {
 
                     }
 
-                    else {
+                    else { // the rest of the circles
                         // face = [v1, v2, v3, v4];
                         // norm = [n1, n2, n3, n4];
 
@@ -586,6 +606,14 @@ $3Dmol.GLDraw = (function() {
         geoGroup.vertices += n_verts;
     };
 
+    //returns the center of the selection that is passed to this function
+    var getCenter = function(sel){
+        //todo: look in zoomto at how it is done there
+        //this may just take a list of all of the selected 
+        //atoms and generate an average coordinate and return that
+
+    }
+
     /** Create a cone 
      * @function $3Dmol.GLDraw.drawCone
      * @param {geometry}
@@ -602,6 +630,9 @@ $3Dmol.GLDraw = (function() {
     draw.drawCone = function(geo, from, to, radius, color) {
         if (!from || !to)
             return;
+        console.log(from)
+        console.log(to)
+        //check if from and to do not contain x,y,z and if  so generate a center based on the passed selections
 
         color = color || {r:0, g:0, b:0};
 
