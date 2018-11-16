@@ -27,6 +27,8 @@
  * @prop {string} ssPyMOL - PyMol secondary colorscheme
  * @prop {string} ssJmol - Jmol secondary colorscheme
  * @prop {string} Jmol - Jmol primary colorscheme
+ * @prop {string} netsAtypes - Color scheme for atype based net coloring
+ * @prop {string} nets - Color scheme for element based net coloring
  * @prop {string} default - default colorscheme
  * @prop {string} amino - amino acid colorscheme
  * @prop {string} shapely - shapely protien colorscheme
@@ -371,8 +373,8 @@ $3Dmol.elementColors.Jmol = {
         'LA': 0x70D4FF,
         'Ce': 0xFFFFC7,
         'CE': 0xFFFFC7,
-        'Pr': 0xD9FFC7,
-        'PR': 0xD9FFC7,
+        'Pr': 0xAB0000,
+        'PR': 0xAB0000,
         'Nd': 0xC7FFC7,
         'ND': 0xC7FFC7,
         'Pm': 0xA3FFC7,
@@ -432,8 +434,8 @@ $3Dmol.elementColors.Jmol = {
         'RA': 0x007D00,
         'Ac': 0x70ABFA,
         'AC': 0x70ABFA,
-        'Th': 0x00BAFF,
-        'TH': 0x00BAFF,
+        'Th': 0x001FD7,
+        'TH': 0x001FD7,
         'Pa': 0x00A1FF,
         'PA': 0x00A1FF,
         'U': 0x008FFF,
@@ -472,6 +474,15 @@ $3Dmol.elementColors.Jmol = {
         'Mt': 0xEB0026,
         'MT': 0xEB0026
 };
+
+$3Dmol.elementColors.netsAtypes = {
+    '0': 0xff0000,
+    '1': 0x000000,
+    '2': 0x00ff00,
+    '3': 0x0000ff,
+    '4': 0xff9205,
+    '5': 0xff0087,
+}
 
 
 $3Dmol.elementColors.nets = {
@@ -771,7 +782,8 @@ $3Dmol.builtinColorSchemes = {
         'nucleic' :{'prop':'resn', map:$3Dmol.residues.nucleic},
         'chain' :{'prop':'chain', map:$3Dmol.chains.atom},
         'chainHetatm' :{'prop':'chain', map:$3Dmol.chains.hetatm},
-        
+        'nets':{'prop':'elem', map:$3Dmol.elementColors.nets},
+        'netsAtypes':{'prop':'type', map:$3Dmol.elementColors.netsAtypes},
 };
 
 /** Return proper color for atom given style
